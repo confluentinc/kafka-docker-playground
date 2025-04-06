@@ -15,7 +15,7 @@
         <confluent.version>7.3.0</confluent.version>
         <assertj.version>3.19.0</assertj.version>
         <awaitibility.version>3.0.0</awaitibility.version>
-        <kafka.version>3.4.0</kafka.version>
+        <kafka.version>3.7.1</kafka.version>
         <logback.version>1.4.12</logback.version>
         <jackson.version>2.14.2</jackson.version>
         <junit.version>5.9.2</junit.version>
