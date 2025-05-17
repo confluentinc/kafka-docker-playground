@@ -13,7 +13,7 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <google.protobuf.version>3.16.3</google.protobuf.version>
         <protoc.jar.maven.plugin>3.11.4</protoc.jar.maven.plugin>
-        <kafka.tag>6.2.0</kafka.tag>
+        <kafka.tag>7.3.0</kafka.tag>
         <kafka.client.tag>2.8.0</kafka.client.tag>
     </properties>
     <repositories>
