@@ -11,8 +11,8 @@
     <properties>
         <maven.compiler.source>8</maven.compiler.source>
         <maven.compiler.target>8</maven.compiler.target>
-        <sqlserver.jdbc.driver.version>12.2.0.jre11</sqlserver.jdbc.driver.version>
-        <log4j2.version>2.19.0</log4j2.version>
+        <sqlserver.jdbc.driver.version>12.10.0.jre11</sqlserver.jdbc.driver.version>
+        <log4j2.version>2.24.3</log4j2.version>
         <jcommander.version>1.82</jcommander.version>
     </properties>
 
@@ -35,7 +35,7 @@
         <dependency>
             <groupId>com.github.javafaker</groupId>
             <artifactId>javafaker</artifactId>
-            <version>0.12</version>
+            <version>0.18</version>
         </dependency>
     </dependencies>
 
@@ -45,7 +45,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-assembly-plugin</artifactId>
-                <version>3.2.0</version>
+                <version>3.7.1</version>
                 <configuration>
                     <descriptorRefs>
                         <descriptorRef>jar-with-dependencies</descriptorRef>
