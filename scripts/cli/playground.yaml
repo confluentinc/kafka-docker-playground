@@ -647,8 +647,6 @@ subcommands:
   - name: refresh-cp-docker-images
     description: | 
         🔄 Refresh (pull from Docker) all Confluent Platform docker images related to a version installed locally
-        
-            It also refreshes images for aws, gcp and azure cli
     usage: playground refresh-cp-docker-images [OPTIONS]
     options:
     - names:
@@ -3147,20 +3145,11 @@ subcommands:
         description: | 
           🕵️  Tail and follow connect logs
             
-            For onprem connectors, this is basically a shortcut for "playground container logs --container connect", --connector flag is not relevant
+            This is basically a shortcut for "playground container logs --container connect"
             
-            For Fully Managed connectors, limitations apply (see https://docs.confluent.io/cloud/current/connectors/logging-cloud-connectors.html#using-ccloud-cli)
+            It does not work for Fully Managed connectors, except if you're a Confluent employee, this will open log in our internal tools (make sure to follow this first https://github.com/confluentinc/kafka-docker-playground-internal#how-to-use)
         usage: playground connector logs [OPTIONS]
         options:
-        - names:
-          - --connector
-          - -c
-          argument: CONNECTOR
-          description: | 
-            🔗 Connector name
-            
-            🎓 Tip: If not specified, the command will apply to all connectors
-            
         - names:
           - --open
           - -o
@@ -3180,11 +3169,21 @@ subcommands:
             Conflicts with: --open
             
         - names:
-          - --verbose
-          - -v
-          argument: ""
+          - --max-wait
+          - -m
+          argument: 600
           description: | 
-            🐞 Show command being ran.
+            ⏳ Max time in seconds to wait when using --wait-for-log (default 600s)
+            
+            Default value: 600
+            
+            Conflicts with: --open
+            
+        - names:
+          - --lcc-id
+          argument: LCC-ID
+          description: | 
+            ☁️ Fully Managed lcc id (only for Confluent employees)
             
       - name: open-ccloud-connector-in-browser
         description: | 
