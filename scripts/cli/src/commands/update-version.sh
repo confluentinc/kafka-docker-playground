@@ -317,7 +317,7 @@ then
 
     if [[ $res == *"$MENU_CONNECT_TAG"* ]]
     then
-      connect_tag=$(playground get-tag-list --connect-only)
+      connect_tag=$(playground get-tag-list)
       if [[ $connect_tag == *"@"* ]]
       then
         connect_tag=$(echo "$connect_tag" | cut -d "@" -f 2)
