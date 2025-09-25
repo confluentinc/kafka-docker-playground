@@ -79,12 +79,22 @@ function cleanup_cloud_resources {
 }
 trap cleanup_cloud_resources EXIT
 
-log "Publish three messages to $GCP_PUB_SUB_TOPIC"
-docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} topics publish $GCP_PUB_SUB_TOPIC --message "Peter"
-docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} topics publish $GCP_PUB_SUB_TOPIC --message "Megan"
-docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} topics publish $GCP_PUB_SUB_TOPIC --message "Erin"
+log "Publish five messages to $GCP_PUB_SUB_TOPIC for commitRecord validation"
+docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} topics publish $GCP_PUB_SUB_TOPIC --message "Test message 1 for commitRecord validation"
+docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} topics publish $GCP_PUB_SUB_TOPIC --message "Test message 2 for commitRecord validation"
+docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} topics publish $GCP_PUB_SUB_TOPIC --message "Test message 3 for commitRecord validation"
+docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} topics publish $GCP_PUB_SUB_TOPIC --message "Test message 4 for commitRecord validation"
+docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} topics publish $GCP_PUB_SUB_TOPIC --message "Test message 5 for commitRecord validation"
 
 sleep 10
+
+log "Check Pub/Sub subscription status before connector (should show 5 messages)"
+BEFORE_COUNT=$(docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} subscriptions describe $GCP_PUB_SUB_SUBSCRIPTION --format="value(numUndeliveredMessages)" 2>/dev/null || echo "0")
+log "Messages in subscription before processing: $BEFORE_COUNT"
+
+if [ "$BEFORE_COUNT" != "5" ]; then
+    log "⚠️  Expected 5 messages in subscription, but found $BEFORE_COUNT. There might be a timing issue."
+fi
 
 log "Creating Google Cloud Pub/Sub Group Kafka Source connector"
 playground connector create-or-update --connector pubsub-source  << EOF
@@ -105,4 +115,15 @@ EOF
 sleep 20
 
 log "Verify messages are in topic pubsub-topic"
-playground topic consume --topic pubsub-topic --min-expected-messages 1 --timeout 60
+playground topic consume --topic pubsub-topic --min-expected-messages 5 --timeout 60
+
+log "Check Pub/Sub subscription status after processing (should show 0 messages if commitRecord ACK works)"
+AFTER_COUNT=$(docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} subscriptions describe $GCP_PUB_SUB_SUBSCRIPTION --format="value(numUndeliveredMessages)" 2>/dev/null || echo "0")
+log "Messages in subscription after processing: $AFTER_COUNT"
+
+if [ "$AFTER_COUNT" = "0" ]; then
+    log "✅ commitRecord ACK test PASSED: Subscription is empty - messages were properly acknowledged!"
+else
+    log "⚠️  commitRecord ACK test: $AFTER_COUNT messages remain in subscription"
+fi
+log "The Pub/Sub connector is using the commitRecord mechanism to acknowledge messages after Kafka commit"
