@@ -21,3 +21,4 @@ services:
         - ../../connect/connect-ibm-mq-sink/jms.jar:/usr/share/confluent-hub-components/confluentinc-kafka-connect-ibmmq-sink/lib/jms.jar
     environment:
       CONNECT_PLUGIN_PATH: /usr/share/confluent-hub-components/confluentinc-kafka-connect-ibmmq-sink
+      CLASSPATH: "/usr/share/confluent-hub-components/confluentinc-kafka-connect-ibmmq-sink/lib/javax.jms-api-2.0.1.jar"
