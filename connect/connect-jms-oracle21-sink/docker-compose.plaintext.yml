@@ -22,3 +22,5 @@ services:
         - ../../connect/connect-jms-oracle21-sink/jta-1.1.jar:/usr/share/confluent-hub-components/confluentinc-kafka-connect-jms-sink/lib/jta-1.1.jar
     environment:
       CONNECT_PLUGIN_PATH: /usr/share/confluent-hub-components/confluentinc-kafka-connect-jms-sink
+      CLASSPATH: /usr/share/confluent-hub-components/confluentinc-kafka-connect-jms-sink/lib/jta-1.1.jar:/usr/share/confluent-hub-components/confluentinc-kafka-connect-jms-sink/lib/javax.jms-api-2.0.1.jar
+
