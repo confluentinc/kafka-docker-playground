@@ -105,7 +105,7 @@ playground topic produce -t big_query_stats --nb-messages 1 --forced-value '{"us
 EOF
 
 log "Creating GCP BigTable Sink connector"
-playground connector create-or-update --connector gcp-bigtable-sink  << EOF
+playground connector create-or-update --connector gcp-bigtable-sink  << EOF || true
 {
     "connector.class": "io.confluent.connect.gcp.bigtable.BigtableSinkConnector",
     "tasks.max" : "1",
@@ -122,6 +122,24 @@ playground connector create-or-update --connector gcp-bigtable-sink  << EOF
     "confluent.topic.replication.factor": "1"
 }
 EOF
+
+log "Sleeping 60 seconds to let the connector start..."
+sleep 60
+
+log "Checking connector status..."
+playground connector status --connector gcp-bigtable-sink || true
+
+log "Listing all connectors..."
+curl -s http://localhost:8083/connectors | jq . || true
+
+log "Getting connector status via REST API..."
+curl -s http://localhost:8083/connectors/gcp-bigtable-sink/status | jq . || true
+
+log "Getting Connect worker log errors..."
+docker logs connect 2>&1 | grep -i -E "ERROR|FATAL|Exception|ClassNotFoundException|NoSuchMethod|NoClassDefFound|bigtable" | tail -50 || true
+
+log "Getting last 100 lines of Connect worker logs..."
+docker logs connect 2>&1 | tail -100
 
 playground connector show-lag --connector gcp-bigtable-sink --max-wait 360
 
