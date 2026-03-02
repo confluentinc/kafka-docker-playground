@@ -91,10 +91,7 @@ playground connector create-or-update --connector azure-service-bus-source  << E
     "azure.servicebus.max.waiting.time.seconds" : "30",
     "confluent.license": "",
     "confluent.topic.bootstrap.servers": "broker:9092",
-    "confluent.topic.replication.factor": "1",
-    "errors.tolerance": "all",
-    "errors.log.enable": "true",
-    "errors.log.include.messages": "true"
+    "confluent.topic.replication.factor": "1"
 }
 EOF
 
