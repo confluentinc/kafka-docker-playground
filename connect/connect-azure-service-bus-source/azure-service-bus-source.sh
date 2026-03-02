@@ -103,5 +103,17 @@ docker exec -e SB_SAMPLES_CONNECTIONSTRING="$SB_SAMPLES_CONNECTIONSTRING" -e AZU
 
 sleep 180
 
+log "DEBUG: Listing all Kafka topics"
+docker exec broker kafka-topics --bootstrap-server broker:9092 --list 2>&1 || true
+
+log "DEBUG: Connect worker logs (last 100 lines)"
+docker logs connect --tail 100 2>&1 || true
+
+log "DEBUG: Connector config via REST API"
+docker exec connect curl -s http://localhost:8083/connectors/azure-service-bus-source/config 2>&1 || true
+
+log "DEBUG: Connector status via REST API"
+docker exec connect curl -s http://localhost:8083/connectors/azure-service-bus-source/status 2>&1 || true
+
 log "Verifying topic servicebus-topic"
 playground topic consume --topic servicebus-topic --min-expected-messages 5 --timeout 60
