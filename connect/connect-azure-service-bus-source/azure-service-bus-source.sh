@@ -17,7 +17,7 @@ for component in QueuesGettingStarted
 do
      set +e
      log "🏗 Building jar for ${component}"
-     docker run -i --rm -e KAFKA_CLIENT_TAG=$KAFKA_CLIENT_TAG -e TAG=$TAG_BASE -v "${PWD}/${component}":/usr/src/mymaven -v "$HOME/.m2":/root/.m2 -v "$PWD/../../scripts/settings.xml:/tmp/settings.xml" -v "${PWD}/${component}/target:/usr/src/mymaven/target" -w /usr/src/mymaven maven:3.6.1-jdk-11 mvn -s /tmp/settings.xml -Dkafka.tag=$TAG -Dkafka.client.tag=$KAFKA_CLIENT_TAG package > /tmp/result.log 2>&1
+     docker run -i --rm -e KAFKA_CLIENT_TAG=$KAFKA_CLIENT_TAG -e TAG=$TAG_BASE -v "${PWD}/${component}":/usr/src/mymaven -v "$HOME/.m2":/root/.m2 -v "$PWD/../../scripts/settings.xml:/tmp/settings.xml" -v "${PWD}/${component}/target:/usr/src/mymaven/target" -w /usr/src/mymaven maven:3.9.11-eclipse-temurin-11 mvn -s /tmp/settings.xml -Dkafka.tag=$TAG -Dkafka.client.tag=$KAFKA_CLIENT_TAG package > /tmp/result.log 2>&1
      if [ $? != 0 ]
      then
           logerror "❌ failed to build java component $component"
@@ -101,19 +101,7 @@ log "Inject data in Service Bus, using QueuesGettingStarted java program"
 SB_SAMPLES_CONNECTIONSTRING="Endpoint=sb://$AZURE_SERVICE_BUS_NAMESPACE.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=$AZURE_SAS_KEY"
 docker exec -e SB_SAMPLES_CONNECTIONSTRING="$SB_SAMPLES_CONNECTIONSTRING" -e AZURE_SERVICE_BUS_QUEUE_NAME="$AZURE_SERVICE_BUS_QUEUE_NAME" simple-send bash -c "java -jar queuesgettingstarted-1.0.0-jar-with-dependencies.jar"
 
-sleep 180
-
-log "DEBUG: Listing all Kafka topics"
-docker exec broker kafka-topics --bootstrap-server broker:9092 --list 2>&1 || true
-
-log "DEBUG: Connect worker logs (last 100 lines)"
-docker logs connect --tail 100 2>&1 || true
-
-log "DEBUG: Connector config via REST API"
-docker exec connect curl -s http://localhost:8083/connectors/azure-service-bus-source/config 2>&1 || true
-
-log "DEBUG: Connector status via REST API"
-docker exec connect curl -s http://localhost:8083/connectors/azure-service-bus-source/status 2>&1 || true
+sleep 15
 
 log "Verifying topic servicebus-topic"
 playground topic consume --topic servicebus-topic --min-expected-messages 5 --timeout 60
