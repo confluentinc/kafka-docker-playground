@@ -23,14 +23,6 @@ public class QueuesGettingStarted {
 
     public void run(String connectionString) throws Exception {
 
-        // Create a QueueClient instance for receiving using the connection string builder
-        // We set the receive mode to "PeekLock", meaning the message is delivered
-        // under a lock and must be acknowledged ("completed") to be removed from the queue
-        QueueClient receiveClient = new QueueClient(new ConnectionStringBuilder(connectionString, System.getenv("AZURE_SERVICE_BUS_QUEUE_NAME")), ReceiveMode.PEEKLOCK);
-        // We are using single thread executor as we are only processing one message at a time
-    	ExecutorService executorService = Executors.newSingleThreadExecutor();
-        this.registerReceiver(receiveClient, executorService);
-
         // Create a QueueClient instance for sending and then asynchronously send messages.
         // Close the sender once the send operation is complete.
         QueueClient sendClient = new QueueClient(new ConnectionStringBuilder(connectionString, System.getenv("AZURE_SERVICE_BUS_QUEUE_NAME")), ReceiveMode.PEEKLOCK);
@@ -38,10 +30,6 @@ public class QueuesGettingStarted {
 
         // wait for ENTER or 10 seconds elapsing
         waitForEnter(10);
-
-        // shut down receiver to close the receive loop
-        receiveClient.close();
-        executorService.shutdown();
     }
 
     CompletableFuture<Void> sendMessagesAsync(QueueClient sendClient) {
