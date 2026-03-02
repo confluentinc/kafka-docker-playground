@@ -73,12 +73,6 @@ AZURE_SAS_KEY=$(az servicebus namespace authorization-rule keys list \
     --namespace-name $AZURE_SERVICE_BUS_NAMESPACE \
     --name "RootManageSharedAccessKey" | jq -r '.primaryKey')
 
-# generate data file for externalizing secrets
-sed -e "s|:AZURE_SAS_KEY:|$AZURE_SAS_KEY|g" \
-    -e "s|:AZURE_SERVICE_BUS_NAMESPACE:|$AZURE_SERVICE_BUS_NAMESPACE|g" \
-    -e "s|:AZURE_SERVICE_BUS_QUEUE_NAME:|$AZURE_SERVICE_BUS_QUEUE_NAME|g" \
-    ../../connect/connect-azure-service-bus-source/data.template > ../../connect/connect-azure-service-bus-source/data
-
 PLAYGROUND_ENVIRONMENT=${PLAYGROUND_ENVIRONMENT:-"plaintext"}
 playground start-environment --environment "${PLAYGROUND_ENVIRONMENT}" --docker-compose-override-file "${PWD}/docker-compose.plaintext.yml"
 
@@ -89,9 +83,9 @@ playground connector create-or-update --connector azure-service-bus-source  << E
     "kafka.topic": "servicebus-topic",
     "tasks.max": "1",
     "azure.servicebus.sas.keyname": "RootManageSharedAccessKey",
-    "azure.servicebus.sas.key": "\${file:/data:AZURE_SAS_KEY}",
-    "azure.servicebus.namespace": "\${file:/data:AZURE_SERVICE_BUS_NAMESPACE}",
-    "azure.servicebus.entity.name": "\${file:/data:AZURE_SERVICE_BUS_QUEUE_NAME}",
+    "azure.servicebus.sas.key": "$AZURE_SAS_KEY",
+    "azure.servicebus.namespace": "$AZURE_SERVICE_BUS_NAMESPACE",
+    "azure.servicebus.entity.name": "$AZURE_SERVICE_BUS_QUEUE_NAME",
     "azure.servicebus.subscription" : "",
     "azure.servicebus.max.message.count" : "10",
     "azure.servicebus.max.waiting.time.seconds" : "30",
