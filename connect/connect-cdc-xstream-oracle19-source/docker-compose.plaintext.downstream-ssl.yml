@@ -1,0 +1,57 @@
+---
+services:
+
+  sql-datagen:
+    build:
+      context: ../../connect/connect-cdc-xstream-oracle19-source/oracle-datagen/
+    hostname: sql-datagen
+    container_name: sql-datagen
+    profiles:
+    - sql_datagen
+    volumes:
+      - ../../connect/connect-cdc-xstream-oracle19-source/oracle-datagen//target/sql-datagen-1.0-SNAPSHOT-jar-with-dependencies.jar:/sql-datagen-1.0-SNAPSHOT-jar-with-dependencies.jar
+
+  sourcedb:
+    platform: linux/amd64
+    image: ${ORACLE_IMAGE_SRC}
+    hostname: sourcedb
+    container_name: sourcedb
+    networks:
+      default:
+        aliases:
+          - srccdb
+    ports:
+      - "1521:1521"
+      - "2484:2484"
+    environment:
+      ORACLE_SID: SRCCDB
+      ORACLE_PDB: SRCPDB1
+      ORACLE_PWD: Admin123
+
+  downstreamdb:
+    platform: linux/amd64
+    image: ${ORACLE_IMAGE_CAP}
+    hostname: downstreamdb
+    container_name: downstreamdb
+    networks:
+      default:
+        aliases:
+          - capcdb
+    ports:
+      - "1522:1521"
+      - "2485:2484"
+    environment:
+      ORACLE_SID: CAPCDB
+      ORACLE_PDB: CAPPDB1
+      ORACLE_PWD: Admin123
+
+  connect:
+    depends_on:
+      - sourcedb
+      - downstreamdb
+    volumes:
+      - ../../connect/connect-cdc-xstream-oracle19-source/lib:/tmp/lib
+    environment:
+      CONNECT_PLUGIN_PATH: /usr/share/confluent-hub-components/confluentinc-kafka-connect-oracle-xstream-cdc-source
+      LD_LIBRARY_PATH: /tmp/lib/instantclient
+      TNS_ADMIN: /usr/share/confluent-hub-components/confluentinc-kafka-connect-oracle-xstream-cdc-source
