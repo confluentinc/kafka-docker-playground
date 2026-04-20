@@ -1,0 +1,8 @@
+---
+services:
+  connect:
+    volumes:
+      - ../../connect/connect-azure-data-lake-storage-gen2-sink/data-acl:/data-acl
+    environment:
+      CONNECT_PLUGIN_PATH: /usr/share/confluent-hub-components/confluentinc-kafka-connect-azure-data-lake-gen2-storage
+
