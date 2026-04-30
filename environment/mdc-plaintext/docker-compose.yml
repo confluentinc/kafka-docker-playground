@@ -333,7 +333,7 @@ services:
       CONTROL_CENTER_ALERTMANAGER_CONFIG_FILE: /mnt/config/alertmanager.yml
 
   prometheus-c3-v2:
-    image: confluentinc/cp-enterprise-prometheus:2.0.0
+    image: confluentinc/cp-enterprise-prometheus:${CP_C3_NEXTGEN_TAG:-2.0.0}
     hostname: prometheus-c3-v2
     container_name: prometheus-c3-v2
     volumes:
@@ -341,7 +341,7 @@ services:
     command: "--config.file=/mnt/config/prometheus.yml --enable-feature=otlp-write-receiver --web.enable-lifecycle"
 
   alertmanager-c3-v2:
-    image: confluentinc/cp-enterprise-alertmanager:2.0.0
+    image: confluentinc/cp-enterprise-alertmanager:${CP_C3_NEXTGEN_TAG:-2.0.0}
     hostname: alertmanager-c3-v2
     container_name: alertmanager-c3-v2
     depends_on:
