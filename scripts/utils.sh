@@ -67,6 +67,16 @@ then
       fi
     fi
 
+    if [ -z "$CP_C3_NEXTGEN_TAG" ]
+    then
+      if [ "$(uname -m)" = "s390x" ]
+      then
+        export CP_C3_NEXTGEN_TAG=2.5.0
+      else
+        export CP_C3_NEXTGEN_TAG=2.0.0
+      fi
+    fi
+
     if [ -z "$CP_SCHEMA_REGISTRY_IMAGE" ]
     then
       export CP_SCHEMA_REGISTRY_IMAGE=confluentinc/cp-schema-registry
