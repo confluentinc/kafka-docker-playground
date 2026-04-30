@@ -275,6 +275,17 @@ function maybe_create_image()
         else
           CONNECT_3RDPARTY_INSTALL="if [ ! -f /tmp/done ]; then yum -y install --disablerepo='Confluent*' bind-utils openssl unzip findutils net-tools nc jq which iptables libmnl krb5-workstation krb5-libs vim && yum clean all && rm -rf /var/cache/yum && rpm -i --nosignature https://yum.oracle.com/repo/OracleLinux/OL8/appstream/aarch64/getPackage/tcpdump-4.9.3-3.el8.aarch64.rpm && touch /tmp/done; fi"
         fi
+      elif [ "$(uname -m)" = "s390x" ]
+      then
+        if version_gt $TAG_BASE "8.0.99"
+        then
+          CONNECT_3RDPARTY_INSTALL="if [ ! -f /tmp/done ]; then microdnf -y install bind-utils openssl unzip findutils net-tools nc jq which iptables libmnl krb5-workstation krb5-libs vim && microdnf clean all  && touch /tmp/done; fi"
+        elif version_gt $TAG_BASE "7.9.9"
+        then
+          CONNECT_3RDPARTY_INSTALL="if [ ! -f /tmp/done ]; then yum -y install bind-utils openssl unzip findutils net-tools nc jq which iptables libmnl krb5-workstation krb5-libs vim && yum clean all && rm -rf /var/cache/yum && rpm -i --nosignature https://yum.oracle.com/repo/OracleLinux/OL9/appstream/s390x/getPackage/tcpdump-4.99.0-9.el9.s390x.rpm && touch /tmp/done; fi"
+        else
+          CONNECT_3RDPARTY_INSTALL="if [ ! -f /tmp/done ]; then yum -y install --disablerepo='Confluent*' bind-utils openssl unzip findutils net-tools nc jq which iptables libmnl krb5-workstation krb5-libs vim && yum clean all && rm -rf /var/cache/yum && rpm -i --nosignature https://yum.oracle.com/repo/OracleLinux/OL8/appstream/s390x/getPackage/tcpdump-4.9.3-3.el8.s390x.rpm && touch /tmp/done; fi"
+        fi
       else
         if version_gt $TAG_BASE "7.9.9"
         then
@@ -854,7 +865,12 @@ function get_connect_image() {
   then
     if version_gt $CP_CONNECT_TAG 5.2.99
     then
-      CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
+      if [ "$(uname -m)" = "s390x" ]
+      then
+        CP_CONNECT_IMAGE=confluentinc/cp-server-connect
+      else
+        CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
+      fi
     else
       CP_CONNECT_IMAGE=confluentinc/cp-kafka-connect-base
     fi
