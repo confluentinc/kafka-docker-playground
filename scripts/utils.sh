@@ -94,7 +94,12 @@ then
 
     if [ -z "$CP_CONNECT_IMAGE" ]
     then
-      export CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
+      if [ "$(uname -m)" = "s390x" ]
+      then
+        export CP_CONNECT_IMAGE=confluentinc/cp-server-connect
+      else
+        export CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
+      fi
     fi
 
     if [ -z "$CP_SCHEMA_REGISTRY_IMAGE" ]
@@ -317,7 +322,12 @@ else
         else
           if [ -z "$CP_CONNECT_IMAGE" ]
           then
-            export CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
+            if [ "$(uname -m)" = "s390x" ]
+            then
+              export CP_CONNECT_IMAGE=confluentinc/cp-server-connect
+            else
+              export CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
+            fi
           fi
         fi
     else

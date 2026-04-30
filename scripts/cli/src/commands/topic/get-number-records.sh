@@ -46,11 +46,18 @@ if [[ "$environment" == "ccloud" ]]; then
     tr -d '"' < $root_folder/.ccloud/librdkafka.delta > $root_folder/.ccloud/librdkafka_no_quotes_tmp.delta
     grep -v "basic.auth.user.info" $root_folder/.ccloud/librdkafka_no_quotes_tmp.delta > $root_folder/.ccloud/librdkafka_no_quotes.delta
 
-    # FIXED: Added --entrypoint to override the default 'kcat' entrypoint
+    # cp-kcat has no s390x image; fall back to the connect image which ships kcat
+    if [ "$(uname -m)" = "s390x" ]
+    then
+      get_connect_image
+      _kcat_image="${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG}"
+    else
+      _kcat_image="confluentinc/cp-kcat:latest"
+    fi
     docker run -d --rm --name "$kcat_container_name" --network=host \
         -v $root_folder/.ccloud/librdkafka_no_quotes.delta:/tmp/configuration/ccloud.properties \
         --entrypoint tail \
-        confluentinc/cp-kcat:latest -f /dev/null > /dev/null 2>&1
+        "$_kcat_image" -f /dev/null > /dev/null 2>&1
 
     trap "docker stop $kcat_container_name > /dev/null 2>&1" EXIT
 fi
