@@ -460,7 +460,7 @@ then
             mkdir -p ${DIR_UTILS}/../confluent-hub
           fi
           log "🎱 Installing connector $owner/$name:$CONNECTOR_VERSION"
-          install_command="docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c \"confluent-hub install --no-prompt $owner/$name:$CONNECTOR_VERSION && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components\""
+          install_command="docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components:z ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c \"confluent-hub install --no-prompt $owner/$name:$CONNECTOR_VERSION && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components\""
           if ! install_connector_with_retry "$install_command"
           then
               logerror "❌ failed to install connector $owner/$name:$CONNECTOR_VERSION"
@@ -615,7 +615,7 @@ else
               cp $CONNECTOR_ZIP /tmp/
 
               log "🎱 Installing connector from zip $connector_zip_name"
-              install_command="docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components -v /tmp:/tmp ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c \"confluent-hub install --no-prompt /tmp/${connector_zip_name} && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components\""
+              install_command="docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components:z -v /tmp:/tmp:z ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c \"confluent-hub install --no-prompt /tmp/${connector_zip_name} && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components\""
               if ! install_connector_with_retry "$install_command"
               then
                   logerror "❌ failed to install connector from zip $connector_zip_name"
@@ -654,7 +654,7 @@ else
             fi
 
             log "🎱 Installing connector $owner/$name:$version_to_get_from_hub"
-            install_command="docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c \"confluent-hub install --no-prompt $owner/$name:$version_to_get_from_hub && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components\""
+            install_command="docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components:z ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c \"confluent-hub install --no-prompt $owner/$name:$version_to_get_from_hub && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components\""
             if ! install_connector_with_retry "$install_command"
             then
                 logerror "❌ failed to install connector $owner/$name:$version_to_get_from_hub"
