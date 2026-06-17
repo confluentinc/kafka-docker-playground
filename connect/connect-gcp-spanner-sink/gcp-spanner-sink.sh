@@ -144,7 +144,7 @@ max_retries=2
 retry=0
 while true; do
   sleep 5
-  docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud spanner databases execute-sql $GCP_SPANNER_DATABASE --instance $GCP_SPANNER_INSTANCE --project $GCP_PROJECT --sql='select * from kafka_products' > /tmp/result.log  2>&1
+  docker run -i --rm --volumes-from gcloud-config google/cloud-sdk:latest gcloud spanner databases execute-sql $GCP_SPANNER_DATABASE --instance $GCP_SPANNER_INSTANCE --project $GCP_PROJECT --sql='select * from kafka_products' > /tmp/result.log 2>&1
   cat /tmp/result.log
   if grep -q "notebooks" /tmp/result.log; then
     break
