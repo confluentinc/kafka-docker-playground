@@ -81,7 +81,9 @@ function urlencode() {
 }
 
 function base64() {
-  docker run -i --rm ddev/ddev-utilities:latest base64 -w 0 "$@"
+  # ddev/ddev-utilities is amd64-only; force the platform so QEMU/binfmt_misc
+  # emulation kicks in on s390x hosts instead of a manifest-list pull failure.
+  docker run --platform linux/amd64 -i --rm ddev/ddev-utilities:latest base64 -w 0 "$@"
 }
 
 function jq() {
