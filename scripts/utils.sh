@@ -28,6 +28,29 @@ then
     export FLINK_TAG=latest
 fi
 
+# Architecture-aware defaults - deliberately unconditional (not nested inside
+# the "if [ -z $TAG ]" block below), since callers that pre-set TAG (e.g. CI
+# pipelines that pin CP_VERSION) still need these picked correctly for s390x.
+if [ -z "$CP_CONNECT_IMAGE" ]
+then
+  if [ "$(uname -m)" = "s390x" ]
+  then
+    export CP_CONNECT_IMAGE=confluentinc/cp-server-connect
+  else
+    export CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
+  fi
+fi
+
+if [ -z "$CP_C3_NEXTGEN_TAG" ]
+then
+  if [ "$(uname -m)" = "s390x" ]
+  then
+    export CP_C3_NEXTGEN_TAG=2.5.0
+  else
+    export CP_C3_NEXTGEN_TAG=2.0.0
+  fi
+fi
+
 # Setting up TAG environment variable
 #
 if [ -z "$TAG" ]
@@ -57,25 +80,8 @@ then
       export CP_KAFKA_IMAGE=confluentinc/cp-server
     fi
 
-    if [ -z "$CP_CONNECT_IMAGE" ]
-    then
-      if [ "$(uname -m)" = "s390x" ]
-      then
-        export CP_CONNECT_IMAGE=confluentinc/cp-server-connect
-      else
-        export CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
-      fi
-    fi
-
-    if [ -z "$CP_C3_NEXTGEN_TAG" ]
-    then
-      if [ "$(uname -m)" = "s390x" ]
-      then
-        export CP_C3_NEXTGEN_TAG=2.5.0
-      else
-        export CP_C3_NEXTGEN_TAG=2.0.0
-      fi
-    fi
+    # CP_CONNECT_IMAGE / CP_C3_NEXTGEN_TAG are set unconditionally above,
+    # before this TAG check - see that block for why.
 
     if [ -z "$CP_SCHEMA_REGISTRY_IMAGE" ]
     then
