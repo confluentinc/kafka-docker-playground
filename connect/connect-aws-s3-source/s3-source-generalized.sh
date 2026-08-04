@@ -69,10 +69,61 @@ playground connector create-or-update --connector s3-source-generalized  << EOF
     "confluent.topic.replication.factor": "1",
     "errors.tolerance": "all",
     "errors.log.enable": "true",
-    "errors.log.include.messages": "true"
+    "errors.log.include.messages": "true",
+    "file.metadata.headers.enable": "true"
 }
 EOF
 
 
 log "Verifying topic quick-start-topic"
 playground topic consume --topic quick-start-topic --min-expected-messages 9 --timeout 60
+
+log "Verifying source.file.* record headers are present"
+# Re-consume one record directly via kafka-console-consumer so we can capture
+# headers and grep them. The playground consume above already prints headers
+# but its output isn't easily captured.
+sample_record=$(docker exec connect kafka-console-consumer \
+    --bootstrap-server broker:9092 \
+    --topic quick-start-topic \
+    --from-beginning \
+    --max-messages 1 \
+    --property print.headers=true \
+    --property headers.separator=, \
+    --timeout-ms 30000 2>&1 || true)
+
+log "Sample record (with headers):"
+echo "$sample_record"
+
+missing=()
+for header in source.file.name source.file.path source.file.last_modified source.file.size; do
+    if ! grep -q "${header}:" <<< "$sample_record"; then
+        missing+=("$header")
+    fi
+done
+
+if [ ${#missing[@]} -gt 0 ]; then
+    logerror "Missing source.file.* headers: ${missing[*]}"
+    exit 1
+fi
+
+# Spot-check the values.
+file_name=$(grep -oE "source\.file\.name:[^,|]*" <<< "$sample_record" | head -1 | cut -d: -f2-)
+file_path=$(grep -oE "source\.file\.path:[^,|]*" <<< "$sample_record" | head -1 | cut -d: -f2-)
+file_size=$(grep -oE "source\.file\.size:[^,|]*" <<< "$sample_record" | head -1 | cut -d: -f2-)
+file_last_modified=$(grep -oE "source\.file\.last_modified:[^,|]*" <<< "$sample_record" | head -1 | cut -d: -f2-)
+
+log "source.file.name           = $file_name"
+log "source.file.path           = $file_path"
+log "source.file.size           = $file_size"
+log "source.file.last_modified  = $file_last_modified"
+
+[[ "$file_name" == "generalized.quickstart.json" ]] \
+    || { logerror "expected source.file.name=generalized.quickstart.json, got '$file_name'"; exit 1; }
+[[ "$file_path" == "quickstart/generalized.quickstart.json" ]] \
+    || { logerror "expected source.file.path=quickstart/generalized.quickstart.json, got '$file_path'"; exit 1; }
+[[ "$file_size" =~ ^[0-9]+$ ]] && [ "$file_size" -gt 0 ] \
+    || { logerror "expected source.file.size to be a positive integer, got '$file_size'"; exit 1; }
+[[ "$file_last_modified" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]] \
+    || { logerror "expected source.file.last_modified to be ISO-8601 instant, got '$file_last_modified'"; exit 1; }
+
+log "All four source.file.* headers verified"
