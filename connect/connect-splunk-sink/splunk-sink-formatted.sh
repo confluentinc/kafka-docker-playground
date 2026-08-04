@@ -45,6 +45,7 @@ playground connector create-or-update --connector splunk-sink  << EOF
      "splunk.indexes": "main",
      "splunk.hec.uri": "http://splunk:8088",
      "splunk.hec.token": "99582090-3ac3-4db1-9487-e17b17a05081",
+     "splunk.hec.ssl.enforced": "false",
      "splunk.hec.json.event.formatted": "true",
      "splunk.hec.max.batch.size": "1",
      "splunk.sourcetypes": "my_sourcetype",
