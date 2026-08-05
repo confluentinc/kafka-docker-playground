@@ -29,7 +29,7 @@
     "start": "node app.js"
   },
   "dependencies": {
-    "express": "^4.17.1",
+    "express": "^5.0.0",
     "oauth2-server": "^3.0.1"
   },
   "engines": {
