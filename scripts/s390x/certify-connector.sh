@@ -11,17 +11,30 @@
 #   5. Diagnose failures against the known error table
 #
 # Usage:
-#   scripts/s390x/certify-connector.sh <connector-dir> [test-script.sh] [--run] [--apply-fixes]
+#   scripts/s390x/certify-connector.sh <connector-dir> [test-script.sh] [--run] [--apply-fixes] [--host <ssh-target>]
 #
 # Examples:
 #   scripts/s390x/certify-connector.sh connect-http-sink
-#   scripts/s390x/certify-connector.sh connect-http-sink http_no_auth.sh --run
 #   scripts/s390x/certify-connector.sh connect-cassandra-sink --apply-fixes
+#   scripts/s390x/certify-connector.sh connect-http-sink http_no_auth.sh --run --host sme@s390x-vm-2
 #
 # --run          actually execute the test script and capture output for Step 5 diagnosis.
 # --apply-fixes  apply the safe, deterministic fixes found in Step 3 (Dockerfile
 #                --platform / OPENSSL_ia32cap, and :z on docker-compose volume
 #                mounts). Always review the diff before committing.
+# --host <ssh-target>
+#                IMPORTANT: wherever this script runs is where Step 2's QEMU
+#                check and Step 4's test execution happen. If you're invoking
+#                this from a laptop, CI runner, or any host that is NOT the
+#                target s390x VM (e.g. driving it through Claude Code on your
+#                own machine), you MUST pass --host so those steps run on the
+#                actual VM instead of silently checking/running against the
+#                wrong machine. When set, this rsyncs the current repo state
+#                to ~/kafka-docker-playground on <ssh-target> and re-invokes
+#                itself there over ssh with --host stripped, streaming output
+#                back. Steps 1 and 3 (group lookup, Dockerfile/compose audit)
+#                are pure repo inspection and work fine without --host from
+#                any machine with network access to the image registries.
 #
 # This script only handles what's deterministic. Group 3 (licensed, no public
 # image) and Group 3b (QEMU high-risk, e.g. Oracle XE/SAP HANA) connectors
@@ -40,7 +53,7 @@ section()  { echo; echo "== $* =="; }
 CONNECTOR_DIR="${1:-}"
 if [ -z "$CONNECTOR_DIR" ]
 then
-    logerror "usage: $0 <connector-dir> [test-script.sh] [--run] [--apply-fixes]"
+    logerror "usage: $0 <connector-dir> [test-script.sh] [--run] [--apply-fixes] [--host <ssh-target>]"
     exit 1
 fi
 shift
@@ -48,15 +61,38 @@ shift
 TEST_SCRIPT=""
 RUN_TEST=0
 APPLY_FIXES=0
-for arg in "$@"
+HOST=""
+REMOTE_ARGS=("$CONNECTOR_DIR")
+while [ $# -gt 0 ]
 do
-    case "$arg" in
-        --run) RUN_TEST=1 ;;
-        --apply-fixes) APPLY_FIXES=1 ;;
-        *.sh) TEST_SCRIPT="$arg" ;;
-        *) logwarn "ignoring unrecognized argument: $arg" ;;
+    case "$1" in
+        --run) RUN_TEST=1; REMOTE_ARGS+=("--run") ;;
+        --apply-fixes) APPLY_FIXES=1; REMOTE_ARGS+=("--apply-fixes") ;;
+        --host)
+            shift
+            HOST="${1:-}"
+            [ -z "$HOST" ] && { logerror "--host requires a value (e.g. --host sme@s390x-vm-2)"; exit 1; }
+            ;;
+        *.sh) TEST_SCRIPT="$1"; REMOTE_ARGS+=("$1") ;;
+        *) logwarn "ignoring unrecognized argument: $1" ;;
     esac
+    shift
 done
+
+if [ -n "$HOST" ]
+then
+    log "--host ${HOST} given: this host ($(uname -n 2>/dev/null || echo unknown)) is not the target s390x VM"
+    log "syncing repo to ${HOST}:~/kafka-docker-playground and re-running there..."
+    if ! command -v rsync >/dev/null 2>&1
+    then
+        logerror "rsync is required for --host but was not found locally"
+        exit 1
+    fi
+    rsync -az --exclude '.git' "${REPO_ROOT}/" "${HOST}:~/kafka-docker-playground/"
+    # shellcheck disable=SC2029 -- REMOTE_ARGS is intentionally expanded client-side
+    ssh -t "$HOST" "cd ~/kafka-docker-playground && bash scripts/s390x/certify-connector.sh ${REMOTE_ARGS[*]}"
+    exit $?
+fi
 
 CONNECT_PATH="${REPO_ROOT}/connect/${CONNECTOR_DIR}"
 if [ ! -d "$CONNECT_PATH" ]
@@ -104,6 +140,13 @@ then
     log "KDP branch HEAD: $(git -C "$REPO_ROOT" log --oneline -1 2>/dev/null || echo 'unknown (not a git checkout?)')"
 else
     log "host arch is $(uname -m), not s390x — skipping QEMU checks (this looks like a non-s390x dev machine)"
+    if [ "$RUN_TEST" -eq 1 ]
+    then
+        logerror "--run was requested but this host is not s390x and --host was not given"
+        logerror "running the test here would silently execute on the wrong architecture and give a meaningless pass/fail"
+        logerror "re-run with --host <ssh-target-for-the-s390x-vm>, or run this script directly on the VM"
+        exit 1
+    fi
 fi
 
 # ---------------------------------------------------------------------------

@@ -21,7 +21,10 @@ happens in that repo, not here.
 - The VMs have **no git access**. Copy the repo over manually (`scp`/`rsync`
   your local `s390x` branch checkout), and copy any script changes back to
   your local clone before committing — nothing you edit only on the VM is
-  safe until it's synced back.
+  safe until it's synced back. (`certify-connector.sh --host` does this sync
+  for you when actually running a test — see section 4 — but you still need
+  the one-time bootstrap below done on the VM first, and you're still
+  responsible for syncing any edits back before they're lost.)
 - Run the one-time bootstrap (idempotent — safe to re-run, but the QEMU
   binfmt registration is in-memory and **does not survive a VM reboot**, so
   re-run it after any restart):
@@ -62,18 +65,32 @@ directly for the full rationale.
 ## 4. Run the certification checklist
 
 Use the script (or the `/certify-s390x` Claude Code skill, which wraps the
-same logic and walks you through applying fixes and the PR flow):
+same logic and walks you through applying fixes and the PR flow).
+
+**Where you run this matters.** If you're working from your laptop (e.g.
+driving this through a local Claude Code session) rather than an SSH session
+already open on the VM, the audit steps are fine to run locally, but the
+actual test run is not — QEMU only exists on the VM, so running there is the
+only way the result means anything. Use `--host` to have the script sync the
+repo and run remotely for you:
 
 ```
-# 1. Audit only — reports group, QEMU status, and Dockerfile issues
+# 1. Audit only — reports group, QEMU status (of wherever this runs), and Dockerfile issues
 bash scripts/s390x/certify-connector.sh <connector-dir>
 
-# 2. Apply the safe, deterministic fixes it found
+# 2. Apply the safe, deterministic fixes it found (local repo edit, no VM needed)
 bash scripts/s390x/certify-connector.sh <connector-dir> --apply-fixes
 
-# 3. Actually run the test (on the s390x VM)
+# 3. Actually run the test — from your laptop, targeting the VM over SSH:
+bash scripts/s390x/certify-connector.sh <connector-dir> --run --host sme@<s390x-vm-hostname>
+
+# ...or, if you're already SSH'd into the VM yourself, just:
 bash scripts/s390x/certify-connector.sh <connector-dir> --run
 ```
+
+The script refuses to actually run the test on a non-s390x host without
+`--host` — that guard exists so a laptop run can't silently produce a
+meaningless pass/fail against the wrong architecture.
 
 What it checks automatically (Section 3 of the design doc, condensed):
 

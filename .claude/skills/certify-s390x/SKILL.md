@@ -8,25 +8,37 @@ description: Walk an SME through certifying one KDP connector on s390x — group
 This skill automates the deterministic parts of the per-connector certification
 checklist from "Automated Testing: Connector Certification on s390x
 architecture" (Section 5.4/5.5), using `scripts/s390x/certify-connector.sh` as
-the underlying engine. It is meant to be run by a connector SME with Claude
-Code, on an s390x VM (or against the repo for the audit-only steps, from any
-machine). See `connect/CERTIFYING_S390X.md` for the plain-prose version of
-this same workflow.
+the underlying engine. See `connect/CERTIFYING_S390X.md` for the plain-prose
+version of this same workflow.
+
+**Two-host reality: Claude Code is almost never running on the s390x VM
+itself.** The SME is typically driving this from their laptop (or wherever
+Claude Code runs), while QEMU and the actual test run only mean something on
+one of the shared s390x VMs. Never assume "the host this command runs on" is
+the VM — check explicitly (see Inputs and Procedure step 1 below), because a
+QEMU check or test run silently executed on the wrong host produces a
+meaningless but confident-looking result.
 
 ## Inputs
 
-Ask the user (if not already given) which connector to certify — the
-directory name under `connect/`, e.g. `connect-cassandra-sink`.
+Ask the user (if not already given):
+1. Which connector to certify — the directory name under `connect/`, e.g.
+   `connect-cassandra-sink`.
+2. Whether they intend to actually run the test in this session, and if so,
+   an SSH target for the s390x VM (e.g. `sme@s390x-vm-2`). If they only want
+   the audit (group lookup + Dockerfile/compose checks), no VM is needed yet.
 
 ## Procedure
 
-1. **Dry-run audit.** Run:
+1. **Dry-run audit — safe to run from any machine.** Run:
    ```
    bash scripts/s390x/certify-connector.sh <connector-dir>
    ```
    This reports (a) the connector's group from `scripts/s390x/connector-groups.txt`,
-   (b) whether QEMU is registered on this host, and (c) any custom Docker
-   builds with known issues (missing `--platform=linux/amd64`, missing
+   (b) whether QEMU is registered *on whatever host this command runs on* —
+   if that's not the s390x VM, this will correctly report "not s390x,
+   skipping," which is expected and not a real check yet — and (c) any custom
+   Docker builds with known issues (missing `--platform=linux/amd64`, missing
    `OPENSSL_ia32cap=0x0` on HTTPS `RUN` steps, EOL base images, missing `:z`
    SELinux relabels on docker-compose volume mounts).
 
@@ -54,14 +66,22 @@ directory name under `connect/`, e.g. `connect-cassandra-sink`.
      `s390x-image-analysis.md` for the target version and edit
      `docker-compose*.yml` directly.
 
-3. **Run the test.** Once fixes are applied and you're on an s390x host with
-   QEMU registered:
+3. **Run the test — this is where the VM matters.** If you have an SSH
+   target for the s390x VM (from Inputs), pass it via `--host` and the script
+   handles syncing the repo and running remotely for you:
    ```
-   bash scripts/s390x/certify-connector.sh <connector-dir> --run
+   bash scripts/s390x/certify-connector.sh <connector-dir> --run --host <ssh-target>
    ```
-   If not on s390x, tell the user this step needs to happen on one of the
-   shared VMs (see `connect/CERTIFYING_S390X.md` for VM access) and stop here
-   — do not attempt to fake or skip validation.
+   If you're already running this command directly on the s390x VM (e.g. the
+   user has an interactive Claude Code session open over SSH to the VM
+   itself), omit `--host` — the script detects it's already on s390x and runs
+   locally.
+
+   If neither applies (no VM access yet, no SSH target given), **stop here**
+   and tell the user this step needs a real s390x VM — do not attempt to run
+   the test locally to "see what happens." The script itself will refuse to
+   run on a non-s390x host without `--host`, but don't rely on that guard as
+   the plan; ask for VM access first.
 
 4. **Diagnose and iterate.** On failure, the script matches the log against
    the Section 5.5 diagnostic table and prints a cause + fix. Apply the fix,
@@ -89,3 +109,6 @@ directory name under `connect/`, e.g. `connect-cassandra-sink`.
 - It does not decide when to give up on a QEMU-emulated Group 3b service —
   that's a judgment call for the SME based on how much debugging time is
   justified.
+- It does not manage VM access or SSH credentials — if the user doesn't have
+  an SSH target for a shared VM yet, that's a coordination step (see
+  `connect/CERTIFYING_S390X.md` section 1), not something to work around.
