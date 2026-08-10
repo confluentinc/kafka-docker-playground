@@ -33,6 +33,14 @@ Ask the user (if not already given):
    <alias>` login it requires — before coming back to this. If they only
    want the audit (group lookup + Dockerfile/compose checks), no VM/SSH
    access is needed yet.
+3. **If the connector's README lists required service credentials** (check
+   `connect/<connector-dir>/README.md` — e.g. `connect-aws-s3-sink` needs
+   `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_REGION`): ask whether the
+   user already has those exported in *their local shell* (not the VM). If
+   so, get the exact env var names so you can pass them via `--forward-env`
+   in step 3 below. If they don't have credentials at all yet, that's a
+   prerequisite to sort out before running — don't proceed to a `--run`
+   that's guaranteed to fail on missing creds.
 
 ## Procedure
 
@@ -78,10 +86,30 @@ Ask the user (if not already given):
    ```
    bash scripts/s390x/certify-connector.sh <connector-dir> --run --host <alias>
    ```
+   If the connector needs service credentials (from Inputs step 3), add
+   `--forward-env` with the exact var names, comma-separated — do not read or
+   echo their values yourself, just pass the names through:
+   ```
+   bash scripts/s390x/certify-connector.sh connect-aws-s3-sink --run --host <alias> \
+       --forward-env AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_SESSION_TOKEN,AWS_REGION
+   ```
+   This forwards those vars from the user's local shell into that one remote
+   run only (see the script's own `--forward-env` header comment for exactly
+   how — piped over stdin, never on a command line, never written to disk on
+   the VM). It is *not* full isolation: these VMs share one login across all
+   SMEs, so anything forwarded is still technically readable by another SME
+   on the same VM while the process runs (via `/proc/<pid>/environ` under the
+   shared account). Tell the user this plainly rather than implying it's
+   fully private, and prefer a short-lived/scoped credential (e.g. an
+   assumed-role session token) over a long-lived static key if they have a
+   choice — this shrinks how bad it is if it's seen, since the forwarding
+   itself can't fully prevent that on a shared account.
+
    If you're already running this command directly on the s390x VM (e.g. the
    user has an interactive Claude Code session open over SSH to the VM
-   itself), omit `--host` — the script detects it's already on s390x and runs
-   locally.
+   itself), omit `--host` (and `--forward-env` — just export the vars in that
+   session yourself, no forwarding needed) — the script detects it's already
+   on s390x and runs locally.
 
    If neither applies (no VM access yet, no alias given), **stop here** and
    tell the user this step needs a real s390x VM — do not attempt to run the

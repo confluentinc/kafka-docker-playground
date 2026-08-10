@@ -80,6 +80,45 @@ driving this through the skill. Set this up once per VM, before your first
    alias is what carries the `IdentityFile`, so the script (and the skill)
    don't need any separate way to know which key to use.
 
+### Connector service credentials (Cloud/SaaS connectors, e.g. S3, GCS)
+
+Some connectors need real service credentials to run at all — check the
+connector's own `README.md` (e.g. `connect-aws-s3-sink` needs
+`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_REGION`, exactly like it
+would for a local, non-s390x run). **Do not put these in a persistent file
+on the VM** (e.g. `~/.aws/credentials`) — the shared VMs use one login
+across all SMEs, so anything written there sits readable by everyone else
+using that VM indefinitely, not just while your test runs.
+
+Instead, export the credentials in your own local shell (same as you would
+for testing this connector anywhere else) and forward them for a single run
+with `--forward-env`:
+
+```
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+export AWS_SESSION_TOKEN=...   # if using temporary credentials
+export AWS_REGION=us-west-2
+
+bash scripts/s390x/certify-connector.sh connect-aws-s3-sink --run --host s390x-vm-1 \
+    --forward-env AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_SESSION_TOKEN,AWS_REGION
+```
+
+This pipes the named vars into that one remote test run only — never written
+to a file on the VM, never appearing on a command line there. It is **not**
+full isolation: the shared-login model means another SME on the same VM
+could technically read the forwarded values from the running process's
+environment for as long as your test is executing. Two things reduce the
+real risk:
+
+- **Prefer short-lived, scoped credentials** (an assumed-role session token,
+  like the real CI pipeline already uses) **over a long-lived IAM key** —
+  if it's seen, it expires soon and can't do much.
+- Treat any credential used this way as burned after the run if it's a
+  long-lived key you can't easily rotate — this workflow is a stopgap until
+  Vault access unblocks the Semaphore path (see the top of this doc), which
+  removes the shared-VM exposure entirely.
+
 ## 2. Branch strategy
 
 - All the common framework fixes (CP image defaults, `:z` SELinux labels,

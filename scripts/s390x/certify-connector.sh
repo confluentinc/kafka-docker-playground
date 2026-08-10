@@ -11,12 +11,14 @@
 #   5. Diagnose failures against the known error table
 #
 # Usage:
-#   scripts/s390x/certify-connector.sh <connector-dir> [test-script.sh] [--run] [--apply-fixes] [--host <ssh-target>]
+#   scripts/s390x/certify-connector.sh <connector-dir> [test-script.sh] [--run] [--apply-fixes] [--host <ssh-target>] [--forward-env VAR1,VAR2,...]
 #
 # Examples:
 #   scripts/s390x/certify-connector.sh connect-http-sink
 #   scripts/s390x/certify-connector.sh connect-cassandra-sink --apply-fixes
 #   scripts/s390x/certify-connector.sh connect-http-sink http_no_auth.sh --run --host sme@s390x-vm-2
+#   scripts/s390x/certify-connector.sh connect-aws-s3-sink --run --host s390x-vm-1 \
+#       --forward-env AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_SESSION_TOKEN,AWS_REGION
 #
 # --run          actually execute the test script and capture output for Step 5 diagnosis.
 # --apply-fixes  apply the safe, deterministic fixes found in Step 3 (Dockerfile
@@ -35,6 +37,23 @@
 #                back. Steps 1 and 3 (group lookup, Dockerfile/compose audit)
 #                are pure repo inspection and work fine without --host from
 #                any machine with network access to the image registries.
+# --forward-env VAR1,VAR2,...
+#                For connectors that need real service credentials (e.g. AWS
+#                for a Cloud/SaaS connector): forwards the named env vars,
+#                read from THIS host's environment, into the single remote
+#                invocation triggered by --host. Values are piped over stdin
+#                into the remote shell, never placed on its command line and
+#                never written to a file there -- they exist only for the
+#                lifetime of that one test run. Only meaningful with --host;
+#                ignored otherwise (the vars are already in your environment
+#                locally). This is NOT a substitute for per-VM secrets
+#                management: the shared s390x VMs use one login for all SMEs,
+#                so anything forwarded here is still readable by another SME
+#                on the same VM for as long as the process is running (via
+#                /proc/<pid>/environ under the shared account) -- prefer
+#                short-lived, narrowly-scoped credentials (e.g. an assumed-role
+#                session token) over long-lived static keys, same as the real
+#                CI pipeline already does. See connect/CERTIFYING_S390X.md.
 #
 # This script only handles what's deterministic. Group 3 (licensed, no public
 # image) and Group 3b (QEMU high-risk, e.g. Oracle XE/SAP HANA) connectors
@@ -62,6 +81,7 @@ TEST_SCRIPT=""
 RUN_TEST=0
 APPLY_FIXES=0
 HOST=""
+FORWARD_ENV=""
 REMOTE_ARGS=("$CONNECTOR_DIR")
 while [ $# -gt 0 ]
 do
@@ -72,6 +92,11 @@ do
             shift
             HOST="${1:-}"
             [ -z "$HOST" ] && { logerror "--host requires a value (e.g. --host sme@s390x-vm-2)"; exit 1; }
+            ;;
+        --forward-env)
+            shift
+            FORWARD_ENV="${1:-}"
+            [ -z "$FORWARD_ENV" ] && { logerror "--forward-env requires a comma-separated var list (e.g. --forward-env AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_SESSION_TOKEN)"; exit 1; }
             ;;
         *.sh) TEST_SCRIPT="$1"; REMOTE_ARGS+=("$1") ;;
         *) logwarn "ignoring unrecognized argument: $1" ;;
@@ -116,8 +141,29 @@ then
 
     log "syncing repo to ${HOST}:~/kafka-docker-playground and re-running there..."
     rsync -az -e "ssh ${SSH_OPTS[*]}" --exclude '.git' "${REPO_ROOT}/" "${HOST}:~/kafka-docker-playground/"
-    # shellcheck disable=SC2029 -- REMOTE_ARGS is intentionally expanded client-side
-    ssh -t "${SSH_OPTS[@]}" "$HOST" "cd ~/kafka-docker-playground && bash scripts/s390x/certify-connector.sh ${REMOTE_ARGS[*]}"
+
+    # Build the exports (if any) as a string BEFORE touching ssh, so secret
+    # values never appear as a command-line argument to ssh, rsync, or the
+    # remote shell -- they travel only in the piped stdin body below and are
+    # exported inside the remote bash process, not written to any file.
+    ENV_SCRIPT=""
+    if [ -n "$FORWARD_ENV" ]
+    then
+        IFS=',' read -r -a FORWARD_ENV_VARS <<< "$FORWARD_ENV"
+        for v in "${FORWARD_ENV_VARS[@]}"
+        do
+            if [ -n "${!v:-}" ]
+            then
+                ENV_SCRIPT+="export $v=$(printf '%q' "${!v}")"$'\n'
+            else
+                logwarn "--forward-env: ${v} is not set locally, skipping"
+            fi
+        done
+        log "forwarding ${#FORWARD_ENV_VARS[@]} env var(s) to ${HOST} for this run only (not persisted, see --forward-env docs above)"
+    fi
+
+    REMOTE_SCRIPT="${ENV_SCRIPT}cd ~/kafka-docker-playground && bash scripts/s390x/certify-connector.sh ${REMOTE_ARGS[*]}"
+    ssh "${SSH_OPTS[@]}" "$HOST" bash -s <<< "$REMOTE_SCRIPT"
     exit $?
 fi
 
