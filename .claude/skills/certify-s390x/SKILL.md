@@ -83,6 +83,24 @@ Ask the user (if not already given):
    run on a non-s390x host without `--host`, but don't rely on that guard as
    the plan; ask for VM access first.
 
+   **Auth: never handled by you or the script.** `--host` relies entirely on
+   SSH key-based auth the user has already set up themselves (an unlocked
+   key in `ssh-agent`, or an `IdentityFile` entry in their `~/.ssh/config`
+   for that host alias) — exactly what they'd need to `ssh` there manually.
+   The script preflights this with a non-interactive (`BatchMode=yes`) check
+   and fails fast with a clear error if it can't connect, rather than hanging
+   on a password prompt neither you nor the script can answer. If that
+   preflight fails:
+   - **Never ask the user to paste a password or private key into chat** —
+     that would put a credential in the conversation transcript, which is
+     exactly what key-based SSH auth exists to avoid.
+   - Tell them to set up passwordless access themselves outside this session
+     (`ssh-copy-id`, or `ssh-add` their key) and confirm `ssh <target>` works
+     with zero prompts before retrying.
+   - If it's a brand-new host, they need one manual interactive `ssh <target>`
+     first to accept its host key. Do not suggest disabling host key checking
+     to work around this — that removes protection against a spoofed host.
+
 4. **Diagnose and iterate.** On failure, the script matches the log against
    the Section 5.5 diagnostic table and prints a cause + fix. Apply the fix,
    re-run, repeat. If a failure doesn't match any known pattern, read the

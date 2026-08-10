@@ -82,15 +82,42 @@ done
 if [ -n "$HOST" ]
 then
     log "--host ${HOST} given: this host ($(uname -n 2>/dev/null || echo unknown)) is not the target s390x VM"
-    log "syncing repo to ${HOST}:~/kafka-docker-playground and re-running there..."
     if ! command -v rsync >/dev/null 2>&1
     then
         logerror "rsync is required for --host but was not found locally"
         exit 1
     fi
-    rsync -az --exclude '.git' "${REPO_ROOT}/" "${HOST}:~/kafka-docker-playground/"
+
+    # BatchMode=yes disables all interactive prompts (password, passphrase,
+    # unknown host key). This script is meant to run non-interactively (e.g.
+    # invoked by Claude Code), and no caller here can answer an SSH prompt --
+    # without this, a missing key would just hang until it times out instead
+    # of failing with a clear, actionable error. Auth itself is never handled
+    # by this script: it relies entirely on whatever key-based auth you
+    # already have set up for this host (ssh-agent, ~/.ssh/config). This
+    # script never asks for, stores, or transmits a password/passphrase.
+    SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10)
+    PREFLIGHT_LOG="$(mktemp /tmp/certify-ssh-preflight.XXXXXX.log)"
+    if ! ssh "${SSH_OPTS[@]}" "$HOST" true 2>"$PREFLIGHT_LOG"
+    then
+        logerror "cannot reach ${HOST} non-interactively over SSH"
+        logerror "$(cat "$PREFLIGHT_LOG")"
+        logerror "this script never prompts for a password -- set up passwordless"
+        logerror "key-based access yourself first (ssh-copy-id, or add the key to"
+        logerror "ssh-agent with ssh-add), and confirm 'ssh ${HOST}' works with no"
+        logerror "prompt before retrying with --host. If this is the first time"
+        logerror "connecting, also do one interactive 'ssh ${HOST}' manually to"
+        logerror "accept its host key -- do not disable host key checking."
+        rm -f "$PREFLIGHT_LOG"
+        exit 1
+    fi
+    rm -f "$PREFLIGHT_LOG"
+    log "SSH preflight OK (non-interactive, key-based auth confirmed)"
+
+    log "syncing repo to ${HOST}:~/kafka-docker-playground and re-running there..."
+    rsync -az -e "ssh ${SSH_OPTS[*]}" --exclude '.git' "${REPO_ROOT}/" "${HOST}:~/kafka-docker-playground/"
     # shellcheck disable=SC2029 -- REMOTE_ARGS is intentionally expanded client-side
-    ssh -t "$HOST" "cd ~/kafka-docker-playground && bash scripts/s390x/certify-connector.sh ${REMOTE_ARGS[*]}"
+    ssh -t "${SSH_OPTS[@]}" "$HOST" "cd ~/kafka-docker-playground && bash scripts/s390x/certify-connector.sh ${REMOTE_ARGS[*]}"
     exit $?
 fi
 
