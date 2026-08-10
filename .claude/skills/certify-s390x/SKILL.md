@@ -25,8 +25,14 @@ Ask the user (if not already given):
 1. Which connector to certify — the directory name under `connect/`, e.g.
    `connect-cassandra-sink`.
 2. Whether they intend to actually run the test in this session, and if so,
-   an SSH target for the s390x VM (e.g. `sme@s390x-vm-2`). If they only want
-   the audit (group lookup + Dockerfile/compose checks), no VM is needed yet.
+   their `~/.ssh/config` alias for the target VM (e.g. `s390x-vm-1`) — not a
+   raw `user@host` string, since the alias is what carries the private key
+   (`IdentityFile`). If they don't have one set up yet, point them at
+   `connect/CERTIFYING_S390X.md` section 1 ("SSH access prerequisites") and
+   have them complete that — including the one manual interactive `ssh
+   <alias>` login it requires — before coming back to this. If they only
+   want the audit (group lookup + Dockerfile/compose checks), no VM/SSH
+   access is needed yet.
 
 ## Procedure
 
@@ -66,38 +72,38 @@ Ask the user (if not already given):
      `s390x-image-analysis.md` for the target version and edit
      `docker-compose*.yml` directly.
 
-3. **Run the test — this is where the VM matters.** If you have an SSH
-   target for the s390x VM (from Inputs), pass it via `--host` and the script
-   handles syncing the repo and running remotely for you:
+3. **Run the test — this is where the VM matters.** If you have the user's
+   `~/.ssh/config` alias for the VM (from Inputs), pass it via `--host` and
+   the script handles syncing the repo and running remotely for you:
    ```
-   bash scripts/s390x/certify-connector.sh <connector-dir> --run --host <ssh-target>
+   bash scripts/s390x/certify-connector.sh <connector-dir> --run --host <alias>
    ```
    If you're already running this command directly on the s390x VM (e.g. the
    user has an interactive Claude Code session open over SSH to the VM
    itself), omit `--host` — the script detects it's already on s390x and runs
    locally.
 
-   If neither applies (no VM access yet, no SSH target given), **stop here**
-   and tell the user this step needs a real s390x VM — do not attempt to run
-   the test locally to "see what happens." The script itself will refuse to
-   run on a non-s390x host without `--host`, but don't rely on that guard as
-   the plan; ask for VM access first.
+   If neither applies (no VM access yet, no alias given), **stop here** and
+   tell the user this step needs a real s390x VM — do not attempt to run the
+   test locally to "see what happens." The script itself will refuse to run
+   on a non-s390x host without `--host`, but don't rely on that guard as the
+   plan; ask for VM access first.
 
-   **Auth: never handled by you or the script.** `--host` relies entirely on
-   SSH key-based auth the user has already set up themselves (an unlocked
-   key in `ssh-agent`, or an `IdentityFile` entry in their `~/.ssh/config`
-   for that host alias) — exactly what they'd need to `ssh` there manually.
-   The script preflights this with a non-interactive (`BatchMode=yes`) check
-   and fails fast with a clear error if it can't connect, rather than hanging
-   on a password prompt neither you nor the script can answer. If that
-   preflight fails:
+   **Auth: never handled by you or the script.** `--host` requires the
+   non-interactive key-based access set up in `connect/CERTIFYING_S390X.md`
+   section 1 ("SSH access prerequisites") — a private key referenced by
+   `IdentityFile` in an `~/.ssh/config` `Host` entry, verified once with a
+   manual `ssh <alias>` login. The script preflights this with a
+   non-interactive (`BatchMode=yes`) check and fails fast with a clear error
+   if it can't connect, rather than hanging on a password prompt neither you
+   nor the script can answer. If that preflight fails:
    - **Never ask the user to paste a password or private key into chat** —
      that would put a credential in the conversation transcript, which is
      exactly what key-based SSH auth exists to avoid.
-   - Tell them to set up passwordless access themselves outside this session
-     (`ssh-copy-id`, or `ssh-add` their key) and confirm `ssh <target>` works
-     with zero prompts before retrying.
-   - If it's a brand-new host, they need one manual interactive `ssh <target>`
+   - Point them at the CERTIFYING_S390X.md prerequisites section and have
+     them complete it, then confirm `ssh <alias>` works with zero prompts
+     before retrying `--host`.
+   - If it's a brand-new host, they need one manual interactive `ssh <alias>`
      first to accept its host key. Do not suggest disabling host key checking
      to work around this — that removes protection against a spoofed host.
 

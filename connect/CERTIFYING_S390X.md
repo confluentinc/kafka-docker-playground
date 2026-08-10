@@ -35,6 +35,51 @@ happens in that repo, not here.
   `tonistiigi/binfmt`, which crashes on this CPU generation), registers it
   with binfmt_misc, and sets podman's short-name resolution to permissive.
 
+### SSH access prerequisites (required before using `--host`)
+
+The VMs are accessed by private key, not password. `certify-connector.sh
+--host` requires **non-interactive** key-based auth to already be working —
+it will not prompt you for anything, and neither will Claude Code if you're
+driving this through the skill. Set this up once per VM, before your first
+`--host` run:
+
+1. Get the private key for the VM through the team's normal channel (ask in
+   the coordination channel referenced under "Getting unstuck" below — it is
+   **not** distributed through this repo or through Claude Code).
+2. Save it and lock down its permissions (SSH refuses to use an
+   overly-permissive key file):
+   ```
+   mkdir -p ~/.ssh
+   cp /path/to/downloaded-key.pem ~/.ssh/s390x-vm.pem
+   chmod 600 ~/.ssh/s390x-vm.pem
+   ```
+3. Add a `Host` entry to `~/.ssh/config` so both you and the script can refer
+   to the VM by a short alias instead of repeating the key path every time:
+   ```
+   Host s390x-vm-1
+       HostName <vm-hostname-or-ip>      # get from the team channel
+       User <your-username-on-the-vm>    # get from the team channel
+       IdentityFile ~/.ssh/s390x-vm.pem
+       IdentitiesOnly yes
+   ```
+4. Confirm it works **manually, interactively, once**, before scripting
+   anything against it:
+   ```
+   ssh s390x-vm-1
+   ```
+   The first connection prompts to accept the VM's host key — accept it now,
+   this way, rather than hitting that prompt inside a non-interactive script
+   run later. If this logs you in with no password prompt, you're done. If
+   it does prompt for a password, key-based auth isn't wired up yet — fix
+   that here before trying `--host`, don't work around it.
+5. Once step 4 works with zero prompts, use the alias as your `--host` value:
+   ```
+   bash scripts/s390x/certify-connector.sh <connector-dir> --run --host s390x-vm-1
+   ```
+   Prefer the config alias (`s390x-vm-1`) over a raw `user@ip` string — the
+   alias is what carries the `IdentityFile`, so the script (and the skill)
+   don't need any separate way to know which key to use.
+
 ## 2. Branch strategy
 
 - All the common framework fixes (CP image defaults, `:z` SELinux labels,
