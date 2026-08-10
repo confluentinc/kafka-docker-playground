@@ -1,0 +1,118 @@
+# s390x connector group reference — simple local lookup for the VM-based
+# certification workflow (used by scripts/s390x/certify-connector.sh Step 1
+# and connect/CERTIFYING_S390X.md).
+#
+# This is NOT a CI/Semaphore test list — that lives in connect-ci-cd-pipelines
+# (cp-connector-tests/tests.txt), is shared across all architectures, and
+# already tracks real connector owners. Nothing here feeds a pipeline; it's
+# purely a quick "what group is this connector in" reference. Re-evaluate
+# whether this file is worth keeping in sync as certification progresses.
+#
+# Full rationale / images / blockers per connector: see s390x-image-analysis.md.
+#
+# Groups:
+#   Cloud/SaaS - calls a real cloud API, no local service container to run
+#   Group 1    - service image already publishes an s390x manifest
+#   Group 2    - needs a minor image version/tag bump to get an s390x manifest
+#   Group 4    - no native s390x image, QEMU emulation is a viable first pass
+#   Group 3    - licensed/commercial, no public s390x image; needs manual,
+#                out-of-band image provisioning, not covered by this workflow
+#                (Group 3 marked with * below also requires vendor license
+#                acceptance even where a multi-arch image exists)
+#
+# Format: connect-<dir>: Group
+
+# Phase 1
+connect-http-sink: Group 1
+connect-jdbc-postgresql-source: Group 1
+connect-jdbc-mariadb-source: Group 1
+connect-jdbc-ibmdb2-source: Group 1
+connect-jdbc-postgresql-sink: Group 1
+connect-jdbc-mariadb-sink: Group 1
+connect-jdbc-ibmdb2-sink: Group 1
+connect-cdc-xstream-oracle19-source: Group 3
+connect-cdc-oracle19-source: Group 3
+connect-ibm-mq-sink: Group 3*
+connect-ibm-mq-source: Group 3*
+connect-debezium-sqlserver-source: Group 4
+connect-debezium-postgresql-source: Group 4
+connect-debezium-mysql-source: Group 4
+connect-jms-active-mq-sink: Group 4
+connect-jms-active-mq-source: Group 4
+connect-splunk-s2s-source: Group 4
+connect-aws-s3-sink: Cloud/SaaS
+connect-gcp-bigquery-sink: Cloud/SaaS
+
+# Phase 2
+connect-http-source: Group 1
+connect-mqtt-source: Group 1
+connect-mqtt-sink: Group 1
+connect-rabbitmq-sink: Group 1
+connect-rabbitmq-source: Group 2
+connect-debezium-mongodb-source: Group 4
+connect-elasticsearch-sink: Group 4
+connect-splunk-sink: Group 4
+connect-splunk-source: Group 4
+connect-salesforce-cdc-source: Group 4
+connect-salesforce-bulkapi-source: Group 4
+connect-salesforce-pushtopics-source: Group 4
+connect-salesforce-sobject-sink: Group 4
+connect-sftp-source: Group 4
+connect-sftp-sink: Group 4
+connect-solace-source: Group 4
+connect-solace-sink: Group 4
+connect-gcp-gcs-sink: Cloud/SaaS
+connect-gcp-gcs-source: Cloud/SaaS
+connect-aws-lambda-sink: Cloud/SaaS
+connect-aws-sqs-source: Cloud/SaaS
+connect-aws-s3-source: Cloud/SaaS
+connect-aws-dynamodb-sink: Cloud/SaaS
+connect-aws-cloudwatch-logs-source: Cloud/SaaS
+connect-aws-kinesis-source: Cloud/SaaS
+connect-aws-redshift-sink: Cloud/SaaS
+connect-azure-data-lake-storage-gen2-sink: Cloud/SaaS
+connect-azure-event-hubs-source: Cloud/SaaS
+connect-azure-blob-storage-sink: Cloud/SaaS
+connect-azure-blob-storage-source: Cloud/SaaS
+connect-azure-service-bus-source: Cloud/SaaS
+connect-gcp-bigtable-sink: Cloud/SaaS
+connect-gcp-cloud-functions-sink: Cloud/SaaS
+connect-gcp-pubsub-source: Cloud/SaaS
+connect-gcp-google-pubsub-source: Cloud/SaaS
+connect-gcp-spanner-sink: Cloud/SaaS
+
+# Phase 3
+connect-syslog-source: Group 1
+connect-replicator: Group 1
+connect-datadiode-source-sink: Group 1
+connect-filestream-sink: Group 1
+connect-filestream-source: Group 1
+connect-spool-dir-source: Group 1
+connect-cassandra-sink: Group 2
+connect-prometheus-sink: Group 2
+connect-tibco-sink: Group 3
+connect-tibco-source: Group 3
+connect-appdynamics-metrics-sink: Group 3
+connect-pivotal-gemfire-sink: Group 3
+# Netezza Sink, Teradata Source, Teradata Sink: Group 3 (licensed) per
+# s390x-image-analysis.md, but no connect-netezza-* / connect-teradata-*
+# directory exists anywhere in this repo — never implemented here.
+connect-hdfs3-sink: Group 4
+connect-hdfs3-source: Group 4
+connect-active-mq-sink: Group 4
+connect-active-mq-source: Group 4
+connect-hbase-sink: Group 4
+connect-heavy-ai-sink: Group 4
+connect-snmp-source: Group 4
+connect-vertica-sink: Group 4
+connect-servicenow-source: Cloud/SaaS
+connect-servicenow-sink: Cloud/SaaS
+connect-azure-functions-sink: Cloud/SaaS
+connect-databricks-delta-lake-sink: Cloud/SaaS
+connect-azure-synapse-analytics-sink: Cloud/SaaS
+connect-azure-cognitive-search-sink: Cloud/SaaS
+connect-datadog-metrics-sink: Cloud/SaaS
+connect-github-source: Cloud/SaaS
+connect-gcp-firebase-source: Cloud/SaaS
+connect-jira-source: Cloud/SaaS
+connect-zendesk-source: Cloud/SaaS
