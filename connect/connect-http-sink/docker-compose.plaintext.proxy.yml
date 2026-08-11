@@ -3,12 +3,15 @@ services:
 
   nginx-proxy:
     image: reiz/nginx_proxy:latest
+    platform: linux/amd64
     hostname: nginx-proxy
     container_name: nginx-proxy
+    depends_on:
+      - http-service-basic-auth
     ports:
       - "8888:8888"
     volumes:
-      - ../../connect/connect-http-sink/nginx-proxy/nginx_whitelist.conf:/usr/local/nginx/conf/nginx.conf
+      - ../../connect/connect-http-sink/nginx-proxy/nginx_whitelist.conf:/usr/local/nginx/conf/nginx.conf:z
 
   connect:
     volumes:
@@ -19,6 +22,7 @@ services:
 
   http-service-basic-auth:
     image: vdesabou/http-sink-demo
+    platform: linux/amd64
     hostname: http-service-basic-auth
     container_name: http-service-basic-auth
     ports:
