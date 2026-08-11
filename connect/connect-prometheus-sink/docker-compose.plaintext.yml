@@ -1,13 +1,14 @@
 ---
 services:
   prometheus-server:
-    image: prom/prometheus:v2.11.1
+    image: prom/prometheus:v2.53.0
+    platform: linux/amd64
     hostname: prometheus-server
     container_name: prometheus-server
     ports:
       - 19090:9090
     volumes:
-      - ../../connect/connect-prometheus-sink/prometheus:/etc/prometheus/
+      - ../../connect/connect-prometheus-sink/prometheus:/etc/prometheus/:z
 
   connect:
     depends_on:
