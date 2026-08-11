@@ -25,15 +25,42 @@ happens in that repo, not here.
   for you when actually running a test — see section 4 — but you still need
   the one-time bootstrap below done on the VM first, and you're still
   responsible for syncing any edits back before they're lost.)
+- **Check what container runtime is already there before installing anything.**
+  Don't assume Podman just because an earlier design doc assumed RHEL 10 —
+  one of the actual shared VMs turned out to be Ubuntu with no runtime at
+  all. If you have to choose:
+  - **Prefer real Docker** (`docker.io` + `docker-compose-plugin`) if
+    there's no rootless-by-policy requirement forcing Podman. KDP's
+    compose files and `profiles:` gating were designed against Docker
+    Compose — using it avoids an entire class of problems: `podman-compose`
+    doesn't handle `profiles:` correctly, older Podman needs a custom
+    compose-provider dispatch shim, `unqualified-search-registries`/
+    `short-name-mode` need manual config, and `netavark`/`aardvark-dns`
+    (Podman's DNS stack) aren't packaged for s390x at all. Docker ships its
+    own embedded DNS and has none of this.
+  - **If Podman is required**, don't reach for `podman-compose` (a
+    third-party reimplementation) — point the real `docker-compose` binary
+    at Podman's Docker-API-compatible socket instead, which is Podman's own
+    documented compose story and handles `profiles:` correctly:
+    ```
+    export DOCKER_HOST=unix:///run/podman/podman.sock
+    ```
+  - If you do end up on Podman without netavark (no s390x package), the
+    older CNI `dnsname` plugin is the fallback for container-name DNS
+    resolution — but expect it to be slower/less reliable than Docker's or
+    netavark's, which is the actual cause behind the Schema Registry race
+    in the diagnostic table below (it's not a QEMU/CPU thing).
 - Run the one-time bootstrap (idempotent — safe to re-run, but the QEMU
   binfmt registration is in-memory and **does not survive a VM reboot**, so
   re-run it after any restart):
   ```
   sudo bash scripts/s390x/setup-vm.sh
   ```
-  This installs the QEMU 7.2 static binary (Debian 12 bookworm build — not
-  `tonistiigi/binfmt`, which crashes on this CPU generation), registers it
-  with binfmt_misc, and sets podman's short-name resolution to permissive.
+  This checks which runtime is present and tells you the above if neither
+  is (it does not install one for you), installs the QEMU 7.2 static binary
+  (Debian 12 bookworm build — not `tonistiigi/binfmt`, which crashes on
+  this CPU generation), registers it with binfmt_misc, and — only if Podman
+  is what's actually there — sets its short-name resolution to permissive.
 
 ### SSH access prerequisites (required before using `--host`)
 
@@ -215,7 +242,7 @@ automatically; here it is for quick reference:
 | `Permission denied` on a mounted file/dir | SELinux blocking the volume mount | Add `:z` to the volume entry |
 | `cannot prompt without a TTY` on image pull | Podman short-name mode is `enforced` | Set `short-name-mode = "permissive"` in `/etc/containers/registries.conf` |
 | `Bad PSW` from the QEMU binary | Wrong QEMU binary (`tonistiigi/binfmt`) | Re-run `setup-vm.sh` for the Debian bookworm build |
-| Schema Registry crash-loops on a fresh environment | Kafka auto-creates `_schemas` with the default `delete` cleanup policy before Schema Registry's own explicit `compact`-policy create call lands; QEMU's slower timing means the race reliably goes the wrong way | See the s390x-gated pre-emptive fix in `connect-aws-s3-sink/s3-sink.sh` (force the topic config before Schema Registry retries) — apply the same pattern to any other connector test hitting this |
+| Schema Registry crash-loops on a fresh environment | Kafka auto-creates `_schemas` with the default `delete` cleanup policy, racing Schema Registry's own explicit `compact`-policy create call. **Not a QEMU/CPU-emulation issue** (not reproduced on a fast native-Docker setup) — the actual trigger observed was Podman's CNI+dnsname networking stack being slow/less reliable than Docker's native bridge+DNS, giving the race enough of a window to go the wrong way | Handled automatically: `KAFKA_AUTO_CREATE_TOPICS_ENABLE` defaults to `false` on s390x for the startup window (`scripts/utils.sh`), then `re_enable_auto_create_topics` (`scripts/cli/src/lib/utils_function.sh`, called from `environment/plaintext/start.sh`) turns it back on once Schema Registry is confirmed up. This removes the race rather than just narrowing it — no per-connector fix needed. If you're on Podman and still hit this, see the Podman-vs-Docker note in Section 1. |
 | Disk full from an old, still-running process | An orphaned container/JVM process from a previous SME's session was never cleaned up | `pkill` does not take a PID (only a process name) — use `kill <pid>` to actually stop it, then check for other stale processes before assuming the disk itself is the problem |
 
 If nothing matches, read the actual log before guessing — don't apply

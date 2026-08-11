@@ -51,6 +51,25 @@ then
   fi
 fi
 
+if [ -z "$KAFKA_AUTO_CREATE_TOPICS_ENABLE" ]
+then
+  if [ "$(uname -m)" = "s390x" ]
+  then
+    # Kafka auto-creating `_schemas` (default 'delete' cleanup policy)
+    # can win the race against Schema Registry's own explicit
+    # 'compact'-policy create call on startup, crash-looping it. This is
+    # a networking/timing issue (observed with Podman's CNI+dnsname
+    # DNS resolution, not reproduced with a fast/native Docker setup) --
+    # disable auto-create for the startup window; re_enable_auto_create_topics
+    # (called from environment/plaintext/start.sh after Schema Registry
+    # is confirmed healthy) turns it back on so connector tests that
+    # rely on auto-created topics still work. See connect/CERTIFYING_S390X.md.
+    export KAFKA_AUTO_CREATE_TOPICS_ENABLE=false
+  else
+    export KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+  fi
+fi
+
 # Setting up TAG environment variable
 #
 if [ -z "$TAG" ]

@@ -29,6 +29,49 @@ then
     exit 1
 fi
 
+# --- container runtime check (does NOT auto-install anything) ---
+#
+# An earlier VM in this fleet had no container runtime at all, and the
+# default assumption ("these are RHEL 10 / rootful Podman 5.x", per the
+# design doc) turned out not to hold -- it was Ubuntu with nothing
+# installed. Installing Podman there instead of Docker cost real time:
+# podman-compose doesn't support `profiles:` correctly, needed a custom
+# compose-provider dispatch shim since that Podman version predates native
+# `podman compose`, and Podman's own registries.conf (unqualified-search-
+# registries, short-name-mode) needed manual configuration -- none of which
+# are real problems, they're Podman-specific setup that Docker doesn't have.
+# Real Docker Engine ships its own embedded DNS (no netavark/aardvark-dns
+# packaging gap to work around either) and is what KDP's compose files and
+# `profiles:` gating were actually designed against.
+#
+# This script does not install either runtime for you -- package
+# availability and any rootless-by-policy requirement are yours to check.
+# Guidance:
+if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1
+then
+    log "container runtime: Docker with compose plugin found, good -- nothing to do here"
+    HAVE_PODMAN=0
+elif command -v podman >/dev/null 2>&1
+then
+    log "container runtime: Podman found, no Docker"
+    logwarn "if Podman isn't a hard requirement (e.g. rootless-by-policy), installing"
+    logwarn "docker.io + docker-compose-plugin instead avoids the whole class of"
+    logwarn "podman-compose/profiles:/registries.conf issues below -- worth checking"
+    logwarn "before continuing with Podman."
+    logwarn "if Podman IS required: prefer pointing the real docker-compose (v1/v2)"
+    logwarn "at Podman's Docker-API-compatible socket over podman-compose --"
+    logwarn "  export DOCKER_HOST=unix:///run/podman/podman.sock"
+    logwarn "-- this is Podman's own documented compose story, handles 'profiles:'"
+    logwarn "correctly, and needs no custom dispatch shim."
+    HAVE_PODMAN=1
+else
+    logerror "no container runtime found (checked for docker, podman)"
+    logerror "prefer installing docker.io + docker-compose-plugin -- see the"
+    logerror "comment above this check for why. Install that (or Podman, if"
+    logerror "required) yourself, then re-run this script."
+    exit 1
+fi
+
 QEMU_BINARY=/usr/local/bin/qemu-x86_64-static
 QEMU_DEB_POOL_URL="https://ftp.debian.org/debian/pool/main/q/qemu/"
 
@@ -81,29 +124,34 @@ else
     log "  registered qemu-x86_64 with F flag"
 fi
 
-log "step 3/3: podman short-name resolution (RHEL 10 requires 'permissive' for non-interactive use)"
-REGISTRIES_CONF=/etc/containers/registries.conf
-if grep -q 'short-name-mode = "permissive"' "$REGISTRIES_CONF" 2>/dev/null
+if [ "$HAVE_PODMAN" -eq 1 ]
 then
-    log "  short-name-mode already permissive, skipping"
-elif grep -q "short-name-mode" "$REGISTRIES_CONF" 2>/dev/null
-then
-    sed -i 's/short-name-mode = "enforced"/short-name-mode = "permissive"/' "$REGISTRIES_CONF"
-    log "  updated short-name-mode to permissive in ${REGISTRIES_CONF}"
-else
-    logwarn "  no short-name-mode setting found in ${REGISTRIES_CONF}, leaving untouched — verify manually if image pulls prompt for a registry"
-fi
+    log "step 3/3: podman registries.conf (short-name resolution + unqualified-search-registries)"
+    REGISTRIES_CONF=/etc/containers/registries.conf
+    if grep -q 'short-name-mode = "permissive"' "$REGISTRIES_CONF" 2>/dev/null
+    then
+        log "  short-name-mode already permissive, skipping"
+    elif grep -q "short-name-mode" "$REGISTRIES_CONF" 2>/dev/null
+    then
+        sed -i 's/short-name-mode = "enforced"/short-name-mode = "permissive"/' "$REGISTRIES_CONF"
+        log "  updated short-name-mode to permissive in ${REGISTRIES_CONF}"
+    else
+        logwarn "  no short-name-mode setting found in ${REGISTRIES_CONF}, leaving untouched — verify manually if image pulls prompt for a registry"
+    fi
 
-# KDP images (confluentinc/*, vdesabou/*, ...) are referenced by short name
-# throughout the repo's docker-compose files and Dockerfiles; without this,
-# podman refuses to resolve them ("no unqualified-search registries are
-# defined").
-if grep -qE '^\s*unqualified-search-registries\s*=' "$REGISTRIES_CONF" 2>/dev/null
-then
-    log "  unqualified-search-registries already set, skipping"
+    # KDP images (confluentinc/*, vdesabou/*, ...) are referenced by short name
+    # throughout the repo's docker-compose files and Dockerfiles; without this,
+    # podman refuses to resolve them ("no unqualified-search registries are
+    # defined").
+    if grep -qE '^\s*unqualified-search-registries\s*=' "$REGISTRIES_CONF" 2>/dev/null
+    then
+        log "  unqualified-search-registries already set, skipping"
+    else
+        echo 'unqualified-search-registries = ["docker.io"]' >> "$REGISTRIES_CONF"
+        log "  added unqualified-search-registries = [\"docker.io\"] to ${REGISTRIES_CONF}"
+    fi
 else
-    echo 'unqualified-search-registries = ["docker.io"]' >> "$REGISTRIES_CONF"
-    log "  added unqualified-search-registries = [\"docker.io\"] to ${REGISTRIES_CONF}"
+    log "step 3/3: skipped (Docker detected, no Podman registries.conf to configure)"
 fi
 
 log "verification:"

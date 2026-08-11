@@ -16,29 +16,6 @@ handle_aws_credentials
 PLAYGROUND_ENVIRONMENT=${PLAYGROUND_ENVIRONMENT:-"plaintext"}
 playground start-environment --environment "${PLAYGROUND_ENVIRONMENT}" --docker-compose-override-file "${PWD}/docker-compose.plaintext.yml"
 
-if [ "$(uname -m)" = "s390x" ]
-then
-    # Under QEMU emulation, broker startup is slow enough that Schema
-    # Registry's own metadata lookup for `_schemas` (which Kafka
-    # auto-creates with the default 'delete' cleanup policy) reliably wins
-    # the race against Schema Registry's explicit create-with-'compact'
-    # call, so it crash-loops on every fresh environment. Close the race by
-    # forcing the correct policy as soon as the broker is reachable, before
-    # letting Schema Registry retry.
-    log "s390x: pre-empting the schema-registry/_schemas cleanup.policy race (see connect/CERTIFYING_S390X.md)"
-    for i in $(seq 1 30)
-    do
-        if docker exec broker kafka-topics --bootstrap-server broker:9092 --list > /dev/null 2>&1
-        then
-            break
-        fi
-        sleep 2
-    done
-    docker exec broker kafka-topics --bootstrap-server broker:9092 --create --if-not-exists --topic _schemas --partitions 1 --replication-factor 1 --config cleanup.policy=compact > /dev/null 2>&1 || true
-    docker exec broker kafka-configs --bootstrap-server broker:9092 --entity-type topics --entity-name _schemas --alter --add-config cleanup.policy=compact > /dev/null 2>&1 || true
-    docker restart schema-registry > /dev/null 2>&1 || true
-fi
-
 AWS_BUCKET_NAME=${AWS_BUCKET_NAME:-pg-bucket-${USER}}
 AWS_BUCKET_NAME=${AWS_BUCKET_NAME//[-.]/}
 
