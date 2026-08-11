@@ -51,6 +51,30 @@ then
   fi
 fi
 
+if [ -z "$KAFKA_AUTO_CREATE_TOPICS_ENABLE" ]
+then
+  if [ "$(uname -m)" = "s390x" ]
+  then
+    # CONFIRMED via a clean A/B re-test on a real s390x VM (same VM, same
+    # connector, this gate present vs absent): without it, Schema Registry
+    # crash-loops on a fresh environment; with it, the test passes. Root
+    # cause: Kafka auto-creates `_schemas` with the default 'delete'
+    # cleanup policy, racing Schema Registry's own explicit 'compact'-policy
+    # create call on startup. The exact trigger for why this race resolves
+    # unfavorably on s390x (a working theory is Podman's CNI+dnsname DNS
+    # stack being slower than Docker's native bridge+DNS) is still not
+    # independently confirmed -- what IS confirmed is that this gate is
+    # necessary. Disable auto-create for the startup window;
+    # re_enable_auto_create_topics (called from environment/plaintext/start.sh
+    # after Schema Registry is confirmed healthy) turns it back on so
+    # connector tests that rely on auto-created topics still work. See
+    # connect/CERTIFYING_S390X.md.
+    export KAFKA_AUTO_CREATE_TOPICS_ENABLE=false
+  else
+    export KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+  fi
+fi
+
 # Setting up TAG environment variable
 #
 if [ -z "$TAG" ]

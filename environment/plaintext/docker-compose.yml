@@ -41,6 +41,14 @@ services:
       KAFKA_ADVERTISED_LISTENERS: BROKER://broker:9092,HOST://localhost:29092
       KAFKA_INTER_BROKER_LISTENER_NAME: BROKER
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      # CONFIRMED via a clean A/B re-test on a real s390x VM (this gate
+      # present vs absent, same VM, same connector): without it, Schema
+      # Registry crash-loops on a fresh environment. On s390x this defaults
+      # to false for the startup window and is flipped back to true once
+      # Schema Registry is confirmed healthy -- see
+      # KAFKA_AUTO_CREATE_TOPICS_ENABLE gating in scripts/utils.sh and
+      # re_enable_auto_create_topics in environment/plaintext/start.sh
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: ${KAFKA_AUTO_CREATE_TOPICS_ENABLE:-true}
       CONFLUENT_SUPPORT_CUSTOMER_ID: 'anonymous'
       # Confluent Metrics Reporter for Control Center Cluster Monitoring
       KAFKA_METRIC_REPORTERS: $KAFKA_METRIC_REPORTERS
@@ -101,6 +109,14 @@ services:
       KAFKA_ADVERTISED_LISTENERS: BROKER://broker2:9092,HOST://localhost:29292
       KAFKA_INTER_BROKER_LISTENER_NAME: BROKER
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      # CONFIRMED via a clean A/B re-test on a real s390x VM (this gate
+      # present vs absent, same VM, same connector): without it, Schema
+      # Registry crash-loops on a fresh environment. On s390x this defaults
+      # to false for the startup window and is flipped back to true once
+      # Schema Registry is confirmed healthy -- see
+      # KAFKA_AUTO_CREATE_TOPICS_ENABLE gating in scripts/utils.sh and
+      # re_enable_auto_create_topics in environment/plaintext/start.sh
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: ${KAFKA_AUTO_CREATE_TOPICS_ENABLE:-true}
       CONFLUENT_SUPPORT_CUSTOMER_ID: 'anonymous'
       # Confluent Metrics Reporter for Control Center Cluster Monitoring
       KAFKA_METRIC_REPORTERS: $KAFKA_METRIC_REPORTERS
@@ -161,6 +177,14 @@ services:
       KAFKA_ADVERTISED_LISTENERS: BROKER://broker3:9092,HOST://localhost:29392
       KAFKA_INTER_BROKER_LISTENER_NAME: BROKER
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      # CONFIRMED via a clean A/B re-test on a real s390x VM (this gate
+      # present vs absent, same VM, same connector): without it, Schema
+      # Registry crash-loops on a fresh environment. On s390x this defaults
+      # to false for the startup window and is flipped back to true once
+      # Schema Registry is confirmed healthy -- see
+      # KAFKA_AUTO_CREATE_TOPICS_ENABLE gating in scripts/utils.sh and
+      # re_enable_auto_create_topics in environment/plaintext/start.sh
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: ${KAFKA_AUTO_CREATE_TOPICS_ENABLE:-true}
       CONFLUENT_SUPPORT_CUSTOMER_ID: 'anonymous'
       # Confluent Metrics Reporter for Control Center Cluster Monitoring
       KAFKA_METRIC_REPORTERS: $KAFKA_METRIC_REPORTERS

@@ -1198,6 +1198,29 @@ function wait_container_ready() {
   log "🚦 containers have started!"
 }
 
+function re_enable_auto_create_topics() {
+  # Companion to the KAFKA_AUTO_CREATE_TOPICS_ENABLE=false gating in
+  # scripts/utils.sh (s390x only) -- confirmed necessary via a clean A/B
+  # re-test on a real s390x VM (this gate present vs absent, same VM, same
+  # connector): without it, Schema Registry crash-loops on a fresh
+  # environment; with it, the test passes. By the time this is called
+  # (after wait_container_ready, which already waits on connect's REST API
+  # -- and connect can't finish starting without Schema Registry being up
+  # first when using Avro), Schema Registry is confirmed healthy, so it's
+  # safe to turn auto-create back on for the rest of the test. No-op on
+  # non-s390x hosts. See connect/CERTIFYING_S390X.md.
+  if [ "$(uname -m)" != "s390x" ]
+  then
+    return 0
+  fi
+  if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^broker$'
+  then
+    return 0
+  fi
+  log "🔧 s390x: re-enabling auto.create.topics.enable now that Schema Registry is up"
+  docker exec broker kafka-configs --bootstrap-server broker:9092 --entity-type brokers --entity-default --alter --add-config auto.create.topics.enable=true > /dev/null 2>&1 || true
+}
+
 function display_jmx_info() {
   if [ -z "$ENABLE_JMX_GRAFANA" ]
   then
