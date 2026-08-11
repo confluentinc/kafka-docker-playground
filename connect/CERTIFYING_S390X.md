@@ -146,11 +146,15 @@ real risk:
   Vault access unblocks the Semaphore path (see the top of this doc), which
   removes the shared-VM exposure entirely.
 
-**Also set a unique `AWS_BUCKET_NAME`.** `s3-sink.sh` defaults to
-`pg-bucket-${USER}` if you don't set one — but the shared login means `$USER`
-is the *same* value for every SME on that VM, so two people running the
-default at once will collide on one bucket. Export and forward your own
-`AWS_BUCKET_NAME` (add it to the `--forward-env` list above) to avoid this.
+**Watch for `$USER`-derived resource names.** Several connector scripts
+(e.g. `connect-aws-s3-sink/s3-sink.sh` defaults to `pg-bucket-${USER}`)
+name cloud resources after `$USER` — harmless on a normal machine, but the
+shared login here means `$USER` is the *same* value for every SME on the
+VM, so two people running the same connector at once can collide on one
+resource. Check whether the script actually honors a pre-set override
+(some don't — that's a legitimate small fix to make while certifying a
+connector) before assuming `export AWS_BUCKET_NAME=... --forward-env
+AWS_BUCKET_NAME` will help.
 
 ## 2. Branch strategy
 
@@ -259,7 +263,7 @@ automatically; here it is for quick reference:
 | `Permission denied` on a mounted file/dir | SELinux blocking the volume mount | Add `:z` to the volume entry |
 | `cannot prompt without a TTY` on image pull | Podman short-name mode is `enforced` | Set `short-name-mode = "permissive"` in `/etc/containers/registries.conf` |
 | `Bad PSW` from the QEMU binary | Wrong QEMU binary (`tonistiigi/binfmt`) | Re-run `setup-vm.sh` for the Debian bookworm build |
-| Schema Registry crash-loops on a fresh environment | Kafka auto-creates `_schemas` with the default `delete` cleanup policy, racing Schema Registry's own explicit `compact`-policy create call. **Not a QEMU/CPU-emulation issue** (not reproduced on a fast native-Docker setup) — the actual trigger observed was Podman's CNI+dnsname networking stack being slow/less reliable than Docker's native bridge+DNS, giving the race enough of a window to go the wrong way | Handled automatically: `KAFKA_AUTO_CREATE_TOPICS_ENABLE` defaults to `false` on s390x for the startup window (`scripts/utils.sh`), then `re_enable_auto_create_topics` (`scripts/cli/src/lib/utils_function.sh`, called from `environment/plaintext/start.sh`) turns it back on once Schema Registry is confirmed up. This removes the race rather than just narrowing it — no per-connector fix needed. If you're on Podman and still hit this, see the Podman-vs-Docker note in Section 1. |
+| Schema Registry crash-loops on a fresh environment | **Root cause not confirmed — treat this as an open question, not a solved one.** Observed once on a VM running Podman + CNI dnsname, with a working theory that Kafka auto-created `_schemas` (default `delete` policy) before Schema Registry's own explicit `compact`-policy create call, possibly because that VM's networking stack was slow. A fix along those lines (disable `auto.create.topics.enable` for the startup window, re-enable after) was written and merged into the shared environment startup, but was never independently re-validated on real hardware after being generalized from the original per-connector workaround — it was reverted pending that validation. **Not necessarily a QEMU/CPU-emulation issue** either way (not reproduced on a fast native-Docker setup). | If you hit this: first try manually creating `_schemas` with `cleanup.policy=compact` before the connector test proceeds (`docker exec broker kafka-topics --create --if-not-exists --topic _schemas --partitions 1 --replication-factor 1 --config cleanup.policy=compact`), and please report back whether it reproduces and on what runtime (Docker vs Podman) so this row can be turned into an actual confirmed fix instead of a guess. |
 | Disk full from an old, still-running process | An orphaned container/JVM process from a previous SME's session was never cleaned up | `pkill` does not take a PID (only a process name) — use `kill <pid>` to actually stop it, then check for other stale processes before assuming the disk itself is the problem |
 
 If nothing matches, read the actual log before guessing — don't apply
