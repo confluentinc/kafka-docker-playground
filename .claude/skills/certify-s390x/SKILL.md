@@ -7,9 +7,27 @@ description: Walk an SME through certifying one KDP connector on s390x — group
 
 This skill automates the deterministic parts of the per-connector certification
 checklist from "Automated Testing: Connector Certification on s390x
-architecture" (Section 5.4/5.5), using `scripts/s390x/certify-connector.sh` as
-the underlying engine. See `connect/CERTIFYING_S390X.md` for the plain-prose
-version of this same workflow.
+architecture" (Section 5.4/5.5). `scripts/s390x/certify-connector.sh` handles
+the parts that are pure procedure with no judgment involved — group lookup,
+QEMU status, image-manifest verification, running the test over SSH,
+diagnosing a failure against the known error table. See
+`connect/CERTIFYING_S390X.md` for the plain-prose version of this workflow.
+
+**You (not the script) apply the fixes.** The script also ships an
+`--apply-fixes` flag that mechanically rewrites the common cases via fixed
+regex/YAML patterns — it's there as a fast path for someone running the
+script directly outside Claude Code. But its coverage is exactly as wide as
+the patterns it was written for: a multi-stage Dockerfile, an image
+referenced through a build `ARG`, a `platform:` key already set on a
+different line, an unusual volume/compose structure — any of these can slip
+past it silently. You have Read/Grep/Edit and can actually look at the file
+in front of you, so don't be limited by what the script happens to handle.
+Use it (without `--apply-fixes`) to get a fast, reliable *audit* — the
+group, the QEMU status, and a list of findings with file/line/image — then
+apply every fix yourself by reading the flagged file and editing it
+directly, using the same fix recipes the script would have used (spelled
+out in step 1 below) plus your own judgment for anything the audit missed
+or got wrong.
 
 **Two-host reality: Claude Code is almost never running on the s390x VM
 itself.** The SME is typically driving this from their laptop (or wherever
@@ -44,26 +62,47 @@ Ask the user (if not already given):
 
 ## Procedure
 
-1. **Audit AND fix in one pass — proactive by default, not reactive.**
-   Always run with `--apply-fixes` from the start; don't do a bare dry-run
-   first and only fix things after seeing them fail on the VM later — that
-   wastes a VM cycle on something already known and fixable ahead of time:
+1. **Audit with the script, fix with your own tools — proactive, not
+   reactive.** Don't wait to see something fail on the VM before fixing a
+   known pattern; that burns a VM cycle on something already knowable ahead
+   of time. Start with the audit (no `--apply-fixes`):
    ```
-   bash scripts/s390x/certify-connector.sh <connector-dir> --apply-fixes
+   bash scripts/s390x/certify-connector.sh <connector-dir>
    ```
-   This proactively applies every deterministic fix across every
-   `docker-compose*.yml` and custom-build Dockerfile in the connector
-   directory: `--platform=linux/amd64` on any image with no s390x manifest
-   (both Dockerfile `FROM` lines and compose `image:` fields), `OPENSSL_ia32cap=0x0`
-   on HTTPS-fetching Dockerfile `RUN` steps, `:z` on host-path volume mounts,
-   and EOL base image bumps (`node:14`→`20`, `python:3.8`→`3.12`,
-   `openjdk:11`→`eclipse-temurin:17`). It also reports the connector's group
-   from `scripts/s390x/connector-groups.txt` and whether QEMU is registered
-   *on whatever host this command runs on* — if that's not the s390x VM,
-   "not s390x, skipping" is expected and not a real check yet.
+   This reports the connector's group from `scripts/s390x/connector-groups.txt`,
+   whether QEMU is registered *on whatever host this command runs on* (if
+   that's not the s390x VM, "not s390x, skipping" is expected and not a real
+   check yet), and a findings list: which Dockerfile `FROM` lines and
+   compose `image:` fields have no confirmed s390x manifest, which HTTPS
+   `RUN` steps lack `OPENSSL_ia32cap=0x0`, which base images are EOL, and
+   which host-path volume mounts are missing `:z`.
 
-   Always review the diff (`git diff`) before committing, even though it's
-   applied automatically — proactive isn't the same as unreviewed.
+   Then, for every finding — and for anything else in the same connector's
+   Dockerfiles/compose files that fits these patterns but the audit didn't
+   catch (multi-stage builds, ARG-based image references, a volume syntax
+   the regex didn't anticipate, etc.) — **read the actual file yourself and
+   apply the fix with the Edit tool**:
+   - **No s390x manifest** (verify with `docker manifest inspect <image>` if
+     you want to double-check the audit rather than trust it blindly): add
+     `--platform=linux/amd64` right after `FROM <image>` in a Dockerfile, or
+     a `platform: linux/amd64` line at the same indentation as `image:` in a
+     compose service.
+   - **HTTPS-fetching `RUN` step** (`npm install`, `pip install`, `apt-get
+     install`, `curl https://...`, etc.) without it already: prefix the step
+     with `OPENSSL_ia32cap=0x0`, e.g. `RUN OPENSSL_ia32cap=0x0 npm install`.
+   - **EOL base image** (`node:14`→`20`, `python:3.8`→`3.12`, `openjdk:11`→
+     `eclipse-temurin:17`): bump the tag, then re-check the OPENSSL_ia32cap
+     fix above still applies — a version bump doesn't remove that need.
+   - **Host-path volume mount** (`./...` or `../...`) with no SELinux label:
+     append `:z` if it has no options yet, or `,z` if it already has
+     options like `:ro`.
+   - **Group 2 image-version bump** (e.g. `prom/prometheus:v2.11.1` →
+     `v2.53.0`): this is a judgment call on the target version, not a
+     mechanical rewrite — check `s390x-image-analysis.md` for the
+     recommended version before editing.
+
+   After editing, `git diff` and actually look at what changed before
+   moving on — applying fixes yourself doesn't mean skipping review.
 
    - If the connector isn't found in `connector-groups.txt`, check
      `s390x-image-analysis.md` for its group manually before proceeding — if
@@ -72,14 +111,6 @@ Ask the user (if not already given):
    - If it's a QEMU high-risk service (Oracle XE, SAP HANA — see the design
      doc's Group 3b), tell the user upfront that QEMU is best-effort and the
      outcome is uncertain, so they can decide whether to spend time on it.
-   - One thing still isn't auto-fixed: image-version bumps (e.g.
-     `prom/prometheus:v2.11.1` → `v2.53.0`, `cassandra:3.0` → `cassandra:4.1`)
-     for Group 2 connectors, since the target version is a judgment call, not
-     a deterministic rewrite. If the group lookup says Group 2, check
-     `s390x-image-analysis.md` for the target version and edit
-     `docker-compose*.yml` yourself.
-   - Re-running `--apply-fixes` is safe and idempotent — already-fixed lines
-     report "OK", not "FIX NEEDED" again.
 
 2. **Run the test — this is where the VM matters.** If you have the user's
    `~/.ssh/config` alias for the VM (from Inputs), pass it via `--host` and
@@ -156,6 +187,12 @@ Ask the user (if not already given):
 
 ## What this skill does not do
 
+- It does not treat `certify-connector.sh`'s findings as the full list of
+  what needs fixing, and it does not call `--apply-fixes` to do the editing.
+  The script's checks are a starting point; you're expected to actually read
+  the connector's Dockerfiles and compose files and catch what a fixed
+  regex/YAML pattern can't — a multi-stage build, an image behind a build
+  `ARG`, an unusual volume line, etc. — using Edit directly.
 - It does not provision licensed/vendor images (Group 3) or set up external
   services (Option B from the QEMU-vs-external-service tradeoff) — those are
   manual infrastructure decisions, not scriptable fixes.

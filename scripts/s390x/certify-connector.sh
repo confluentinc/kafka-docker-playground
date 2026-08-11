@@ -21,17 +21,25 @@
 #       --forward-env AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_SESSION_TOKEN,AWS_REGION
 #
 # --run          actually execute the test script and capture output for Step 5 diagnosis.
-# --apply-fixes  proactively apply every deterministic fix Step 3 finds, across
-#                every docker-compose*.yml and any custom-build Dockerfile in
-#                the connector directory: --platform=linux/amd64 on images with
-#                no s390x manifest (in FROM lines AND compose `image:` fields),
-#                OPENSSL_ia32cap=0x0 on HTTPS-fetching Dockerfile RUN steps,
-#                :z on docker-compose host-path volume mounts, and EOL base
-#                image bumps (node:14->20, python:3.8->3.12, openjdk:11->
-#                eclipse-temurin:17). The goal is to catch these BEFORE a VM
-#                run, not react to them one error at a time -- always review
-#                the diff before committing, but do this by default rather
-#                than only after something fails.
+# --apply-fixes  mechanically apply every fix Step 3's fixed regex/YAML
+#                patterns can find, across every docker-compose*.yml and any
+#                custom-build Dockerfile in the connector directory:
+#                --platform=linux/amd64 on images with no s390x manifest (in
+#                FROM lines AND compose `image:` fields), OPENSSL_ia32cap=0x0
+#                on HTTPS-fetching Dockerfile RUN steps, :z on docker-compose
+#                host-path volume mounts, and EOL base image bumps
+#                (node:14->20, python:3.8->3.12, openjdk:11->eclipse-temurin:17).
+#                This is a fast path for running the script directly outside
+#                Claude Code -- its coverage is only as wide as these fixed
+#                patterns (a multi-stage Dockerfile, an ARG-based image
+#                reference, an unusual volume syntax can slip past it). The
+#                certify-s390x Claude Code skill does NOT rely on this flag:
+#                it runs the script WITHOUT --apply-fixes for the audit, then
+#                applies fixes itself via Read/Edit on the actual files, so
+#                it isn't limited to what these patterns anticipate. Either
+#                way, the goal is to catch these BEFORE a VM run, not react
+#                to them one error at a time -- always review the diff
+#                before committing.
 # --host <ssh-target>
 #                IMPORTANT: wherever this script runs is where Step 2's QEMU
 #                check and Step 4's test execution happen. If you're invoking

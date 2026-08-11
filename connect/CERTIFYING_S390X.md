@@ -181,13 +181,25 @@ directly for the full rationale.
 
 ## 4. Run the certification checklist
 
-Use the script (or the `/certify-s390x` Claude Code skill, which wraps the
-same logic and walks you through applying fixes and the PR flow).
+Use the script directly, or drive it through the `/certify-s390x` Claude
+Code skill — but they apply fixes differently, and it matters which one
+you're using:
 
-**Run with `--apply-fixes` from the start — proactive, not reactive.**
-Don't do a plain audit first and only fix things after they fail on the VM;
-that burns a VM cycle on something already knowable ahead of time. The
-script applies every deterministic fix it finds directly:
+- **Script's `--apply-fixes`**: mechanical, fixed regex/YAML patterns. Fast
+  and fine for the common cases, but its coverage is exactly as wide as
+  those patterns — a multi-stage Dockerfile, an image behind a build `ARG`,
+  an unusual volume line can slip past it silently.
+- **The Claude Code skill**: runs the script *without* `--apply-fixes` for
+  the audit, then reads the flagged files itself and applies fixes with
+  full context, catching things the fixed patterns don't anticipate. If
+  you're working through Claude Code, prefer this over telling it to just
+  run `--apply-fixes`.
+
+Either way, **don't do a plain audit first and only fix things after they
+fail on the VM** — that burns a VM cycle on something already knowable
+ahead of time. Fix proactively, before running.
+
+Using the script's own `--apply-fixes` directly:
 
 ```
 # 1. Audit AND fix in one pass (local repo edit, no VM needed yet):
