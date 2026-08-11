@@ -21,9 +21,17 @@
 #       --forward-env AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_SESSION_TOKEN,AWS_REGION
 #
 # --run          actually execute the test script and capture output for Step 5 diagnosis.
-# --apply-fixes  apply the safe, deterministic fixes found in Step 3 (Dockerfile
-#                --platform / OPENSSL_ia32cap, and :z on docker-compose volume
-#                mounts). Always review the diff before committing.
+# --apply-fixes  proactively apply every deterministic fix Step 3 finds, across
+#                every docker-compose*.yml and any custom-build Dockerfile in
+#                the connector directory: --platform=linux/amd64 on images with
+#                no s390x manifest (in FROM lines AND compose `image:` fields),
+#                OPENSSL_ia32cap=0x0 on HTTPS-fetching Dockerfile RUN steps,
+#                :z on docker-compose host-path volume mounts, and EOL base
+#                image bumps (node:14->20, python:3.8->3.12, openjdk:11->
+#                eclipse-temurin:17). The goal is to catch these BEFORE a VM
+#                run, not react to them one error at a time -- always review
+#                the diff before committing, but do this by default rather
+#                than only after something fails.
 # --host <ssh-target>
 #                IMPORTANT: wherever this script runs is where Step 2's QEMU
 #                check and Step 4's test execution happen. If you're invoking
@@ -223,8 +231,92 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-section "Step 3: check for custom image builds"
+section "Step 3: check for known image/build/volume issues (proactive, not reactive)"
 # ---------------------------------------------------------------------------
+# Every check here mirrors a failure mode that has actually been hit on a
+# real s390x VM run (see connect/CERTIFYING_S390X.md's diagnostic table).
+# The whole point of this step is to apply these BEFORE a VM run costs time
+# on them, not to wait and react to the error -- that's why --apply-fixes
+# is meant to be used by default, not as an afterthought.
+
+check_image_arch() {
+    # prints one of: s390x | no-s390x | unknown
+    local image="$1"
+    if ! command -v docker >/dev/null 2>&1
+    then
+        echo unknown
+        return
+    fi
+    local arches
+    arches=$(docker manifest inspect "$image" 2>/dev/null | python3 -c "
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    print(' '.join(m['platform']['architecture'] for m in d.get('manifests',[])))
+except Exception:
+    print('')
+" 2>/dev/null)
+    if echo "$arches" | grep -qw s390x
+    then
+        echo s390x
+    elif [ -n "$arches" ]
+    then
+        echo no-s390x
+    else
+        echo unknown
+    fi
+}
+
+apply_compose_platform_fix() {
+    # Inserts 'platform: linux/amd64' right after the image: line at $2 in
+    # $1, matching its indentation. No-op if already present on the next
+    # line (idempotent across re-runs).
+    local file="$1" lineno="$2"
+    python3 - "$file" "$lineno" <<'PYEOF'
+import sys
+path, lineno = sys.argv[1], int(sys.argv[2])
+with open(path) as f:
+    lines = f.readlines()
+idx = lineno - 1
+indent = len(lines[idx]) - len(lines[idx].lstrip(' '))
+if idx + 1 < len(lines) and lines[idx + 1].strip() == 'platform: linux/amd64':
+    sys.exit(0)
+lines.insert(idx + 1, ' ' * indent + 'platform: linux/amd64\n')
+with open(path, 'w') as f:
+    f.writelines(lines)
+PYEOF
+}
+
+apply_selinux_z_fix() {
+    # Adds :z (or ,z if other options already present) to any docker-compose
+    # host-path bind mount (./..., ../...) that doesn't already have it.
+    # Rewrites the whole file in one pass to avoid line-number drift.
+    local file="$1"
+    python3 - "$file" <<'PYEOF'
+import re, sys
+path = sys.argv[1]
+with open(path) as f:
+    lines = f.readlines()
+pattern = re.compile(r'^(\s*-\s*\.{1,2}/[^:\n]+:[^:\n]+)(:([^:\n]*))?\s*\n?$')
+changed = False
+for i, line in enumerate(lines):
+    m = pattern.match(line)
+    if not m:
+        continue
+    prefix, _, opts = m.groups()
+    if opts is not None and 'z' in [o.strip() for o in opts.split(',')]:
+        continue
+    newline = f"{prefix}:{opts},z\n" if opts else f"{prefix}:z\n"
+    if newline != line:
+        lines[i] = newline
+        changed = True
+if changed:
+    with open(path, 'w') as f:
+        f.writelines(lines)
+print('changed' if changed else 'unchanged')
+PYEOF
+}
+
 COMPOSE_FILES=$(find "$CONNECT_PATH" -maxdepth 2 -iname "docker-compose*.yml" 2>/dev/null)
 BUILD_DIRS=""
 if [ -n "$COMPOSE_FILES" ]
@@ -244,7 +336,7 @@ fi
 
 if [ -z "$(echo "$BUILD_DIRS" | tr -d ' ')" ]
 then
-    log "no 'build:' sections found — this connector doesn't build its own image, skip to Step 4"
+    log "no 'build:' sections found — this connector doesn't build its own image"
 else
     for BUILD_DIR in $BUILD_DIRS
     do
@@ -258,25 +350,15 @@ else
         HAS_PLATFORM=$(grep -m1 -iE "^FROM\s+--platform" "$DOCKERFILE" || true)
         if [ -n "$BASE_IMAGE" ]
         then
-            ARCHES=""
-            if command -v docker >/dev/null 2>&1
-            then
-                ARCHES=$(docker manifest inspect "$BASE_IMAGE" 2>/dev/null | python3 -c \
-                  "import json,sys
-try:
-    d=json.load(sys.stdin)
-    print([m['platform']['architecture'] for m in d.get('manifests',[])])
-except Exception:
-    print('unknown')" 2>/dev/null)
-            fi
+            ARCH_STATUS=$(check_image_arch "$BASE_IMAGE")
             if [ -n "$HAS_PLATFORM" ]
             then
                 log "  3a OK: FROM already pins --platform (${HAS_PLATFORM})"
-            elif [ -n "$ARCHES" ] && echo "$ARCHES" | grep -q "s390x"
+            elif [ "$ARCH_STATUS" = "s390x" ]
             then
                 log "  3a OK: ${BASE_IMAGE} already publishes an s390x manifest, no --platform needed"
             else
-                logwarn "  3a FIX NEEDED: ${BASE_IMAGE} has no s390x manifest (arches: ${ARCHES:-could not check, is docker/podman available?})"
+                logwarn "  3a FIX NEEDED: ${BASE_IMAGE} has no confirmed s390x manifest (status: ${ARCH_STATUS})"
                 logwarn "    -> add --platform=linux/amd64 to: FROM ${BASE_IMAGE}"
                 if [ "$APPLY_FIXES" -eq 1 ]
                 then
@@ -310,30 +392,96 @@ except Exception:
         fi
 
         # --- Check 3c: EOL base image ---
+        NEW_BASE_IMAGE=""
         case "$BASE_IMAGE" in
-            node:14*|node:14)     logwarn "  3c: ${BASE_IMAGE} is EOL, prefer node:18 or node:20" ;;
-            python:3.8*)          logwarn "  3c: ${BASE_IMAGE} is EOL, prefer python:3.11 or python:3.12" ;;
-            openjdk:11*)          logwarn "  3c: ${BASE_IMAGE} is EOL, prefer eclipse-temurin:17 or eclipse-temurin:21" ;;
-            *)                    log "  3c OK: ${BASE_IMAGE} not a known EOL base" ;;
+            node:14*|node:14)     NEW_BASE_IMAGE="node:20" ;;
+            python:3.8*)          NEW_BASE_IMAGE="python:3.12" ;;
+            openjdk:11*)          NEW_BASE_IMAGE="eclipse-temurin:17" ;;
         esac
+        if [ -n "$NEW_BASE_IMAGE" ]
+        then
+            logwarn "  3c FIX NEEDED: ${BASE_IMAGE} is EOL, prefer ${NEW_BASE_IMAGE}"
+            if [ "$APPLY_FIXES" -eq 1 ]
+            then
+                sed -i.bak -E "s#${BASE_IMAGE}#${NEW_BASE_IMAGE}#" "$DOCKERFILE"
+                log "    applied. Backup at ${DOCKERFILE}.bak"
+                logwarn "    re-verify 3b's OPENSSL_ia32cap fix still applies -- version bumps don't remove that requirement"
+            fi
+        else
+            log "  3c OK: ${BASE_IMAGE} not a known EOL base"
+        fi
     done
 fi
 
-# --- SELinux :z check on docker-compose volume mounts (applies regardless of build:) ---
+# --- Check 3d: docker-compose `image:` fields (applies regardless of build:) ---
+# Most connectors don't build a custom image at all -- they reference a
+# third-party image directly in docker-compose*.yml. This is the check that
+# matters for the majority of Group 4 connectors.
 for f in $COMPOSE_FILES
 do
-    UNLABELED=$(grep -nE "^\s*-\s*\./.*:.*[^z]$|^\s*-\s*\./[^:]*:[^:]*$" "$f" | grep -v ":z" | grep -v ":ro,z" || true)
+    REL_F="$(realpath --relative-to="$REPO_ROOT" "$f")"
+    while IFS=: read -r lineno rest
+    do
+        IMAGE=$(echo "$rest" | sed -E 's/^\s*image:\s*//' | tr -d '"'"'"'' | xargs)
+        # skip CP images and anything using unresolved compose variables --
+        # not a concrete image reference to check, and CP images already
+        # have their own s390x-aware selection in scripts/utils.sh
+        case "$IMAGE" in
+            *'${'*) continue ;;
+        esac
+        [ -z "$IMAGE" ] && continue
+        NEXT_LINE=$(sed -n "$((lineno + 1))p" "$f")
+        if echo "$NEXT_LINE" | grep -q "^\s*platform:\s*linux/amd64\s*$"
+        then
+            log "  3d OK (line ${lineno}, ${REL_F}): ${IMAGE} already pinned to platform: linux/amd64"
+            continue
+        fi
+        ARCH_STATUS=$(check_image_arch "$IMAGE")
+        if [ "$ARCH_STATUS" = "s390x" ]
+        then
+            log "  3d OK (line ${lineno}, ${REL_F}): ${IMAGE} already publishes an s390x manifest"
+        else
+            logwarn "  3d FIX NEEDED (line ${lineno}, ${REL_F}): ${IMAGE} has no confirmed s390x manifest (status: ${ARCH_STATUS})"
+            logwarn "    -> add 'platform: linux/amd64' to this service"
+            if [ "$APPLY_FIXES" -eq 1 ]
+            then
+                apply_compose_platform_fix "$f" "$lineno"
+                log "    applied"
+            fi
+        fi
+    # Processed bottom-to-top (tac) so that inserting a 'platform:' line for
+    # one match doesn't shift the line numbers of matches still to be
+    # processed above it in the same file -- top-to-bottom would corrupt
+    # the file on a second match after the first insertion grows it by a line.
+    done < <(grep -nE "^\s*image:\s*\S+" "$f" | tac)
+done
+
+# --- Check 3e: SELinux :z on docker-compose host-path volume mounts ---
+for f in $COMPOSE_FILES
+do
+    REL_F="$(realpath --relative-to="$REPO_ROOT" "$f")"
+    # \.{1,2}/ matches both ./ and ../ -- this repo's docker-compose files
+    # predominantly use ../../ (parent-relative), not ./, so matching only
+    # a single dot here would silently miss most real volume mounts.
+    UNLABELED=$(grep -nE "^\s*-\s*\.{1,2}/.*:.*[^z]$|^\s*-\s*\.{1,2}/[^:]*:[^:]*$" "$f" | grep -v ":z" | grep -v ":ro,z" || true)
     if [ -n "$UNLABELED" ]
     then
-        REL_F="$(realpath --relative-to="$REPO_ROOT" "$f")"
-        logwarn "possible missing SELinux ':z' relabel in ${REL_F} (RHEL10 SELinux-enforcing hosts only):"
+        logwarn "  3e FIX NEEDED: missing SELinux ':z' relabel in ${REL_F} (RHEL10 SELinux-enforcing hosts only):"
         echo "$UNLABELED" | sed 's/^/    /'
         if [ "$APPLY_FIXES" -eq 1 ]
         then
-            logwarn "  --apply-fixes does not auto-edit docker-compose volume mounts (too easy to mis-rewrite YAML) — apply manually, see connect/CERTIFYING_S390X.md"
+            RESULT=$(apply_selinux_z_fix "$f")
+            log "    applied (${RESULT})"
         fi
+    else
+        log "  3e OK: ${REL_F} — no unlabeled host-path volume mounts"
     fi
 done
+
+if [ "$APPLY_FIXES" -eq 0 ]
+then
+    logwarn "ran in audit-only mode -- re-run with --apply-fixes to apply all of the above proactively instead of finding out on the VM"
+fi
 
 # ---------------------------------------------------------------------------
 section "Step 4: run the connector test"
@@ -367,7 +515,7 @@ fi
 LOG_FILE="$(mktemp /tmp/certify-s390x.XXXXXX.log)"
 log "running: bash connect/${CONNECTOR_DIR}/${TEST_SCRIPT}  (log: ${LOG_FILE})"
 set +e
-bash "$TEST_SCRIPT_PATH" > "$LOG_FILE" 2>&1
+(cd "$CONNECT_PATH" && bash "$TEST_SCRIPT_PATH") > "$LOG_FILE" 2>&1
 TEST_STATUS=$?
 set -e
 

@@ -184,44 +184,49 @@ directly for the full rationale.
 Use the script (or the `/certify-s390x` Claude Code skill, which wraps the
 same logic and walks you through applying fixes and the PR flow).
 
-**Where you run this matters.** If you're working from your laptop (e.g.
-driving this through a local Claude Code session) rather than an SSH session
-already open on the VM, the audit steps are fine to run locally, but the
-actual test run is not — QEMU only exists on the VM, so running there is the
-only way the result means anything. Use `--host` to have the script sync the
-repo and run remotely for you:
+**Run with `--apply-fixes` from the start — proactive, not reactive.**
+Don't do a plain audit first and only fix things after they fail on the VM;
+that burns a VM cycle on something already knowable ahead of time. The
+script applies every deterministic fix it finds directly:
 
 ```
-# 1. Audit only — reports group, QEMU status (of wherever this runs), and Dockerfile issues
-bash scripts/s390x/certify-connector.sh <connector-dir>
-
-# 2. Apply the safe, deterministic fixes it found (local repo edit, no VM needed)
+# 1. Audit AND fix in one pass (local repo edit, no VM needed yet):
 bash scripts/s390x/certify-connector.sh <connector-dir> --apply-fixes
 
-# 3. Actually run the test — from your laptop, targeting the VM over SSH:
+# 2. Actually run the test — from your laptop, targeting the VM over SSH:
 bash scripts/s390x/certify-connector.sh <connector-dir> --run --host sme@<s390x-vm-hostname>
 
 # ...or, if you're already SSH'd into the VM yourself, just:
-bash scripts/s390x/certify-connector.sh <connector-dir> --run
+bash scripts/s390x/certify-connector.sh <connector-dir> --run --apply-fixes
 ```
 
-The script refuses to actually run the test on a non-s390x host without
-`--host` — that guard exists so a laptop run can't silently produce a
-meaningless pass/fail against the wrong architecture.
+**Where you run this matters.** QEMU only exists on the VM, so running step
+2 anywhere else gives a meaningless result — the script refuses to actually
+run the test on a non-s390x host without `--host`, so a laptop run can't
+silently produce a false pass/fail. Step 1 (audit + fix) is fine to run
+locally either way, since it's pure repo editing.
 
-What it checks automatically (Section 3 of the design doc, condensed):
+Always review the diff (`git diff`) before committing — applying
+automatically isn't the same as applying unreviewed. Re-running
+`--apply-fixes` is safe: already-fixed lines report "OK", not "FIX NEEDED"
+again.
 
-- **Custom Docker builds** (`build:` in `docker-compose*.yml`): does the base
-  image have an s390x manifest? If not, needs `FROM --platform=linux/amd64
-  <image>`.
-- **HTTPS-fetching `RUN` steps** (`npm install`, `pip install`, `apt-get
-  install`, `curl https://...`, etc.): needs `OPENSSL_ia32cap=0x0` prefixed,
-  or QEMU's AES-NI emulation breaks TLS.
-- **EOL base images** (`node:14`, `python:3.8`, `openjdk:11`): flagged for
-  upgrade — they carry more QEMU compatibility gaps.
-- **SELinux `:z` on volume mounts**: flagged but not auto-fixed — add `:z`
-  yourself to any docker-compose entry mounting a host path, on RHEL 10 with
-  SELinux enforcing.
+What it fixes automatically (Section 3 of the design doc, condensed):
+
+- **Any image with no s390x manifest** — Dockerfile `FROM` lines in a custom
+  build *and* `image:` fields directly in `docker-compose*.yml` (most
+  connectors don't build their own image at all, so this second case is the
+  one that matters most often): adds `--platform=linux/amd64` /
+  `platform: linux/amd64`.
+- **HTTPS-fetching Dockerfile `RUN` steps** (`npm install`, `pip install`,
+  `apt-get install`, `curl https://...`, etc.): prefixes
+  `OPENSSL_ia32cap=0x0`, or QEMU's AES-NI emulation breaks TLS.
+- **EOL base images** (`node:14`, `python:3.8`, `openjdk:11`): bumped to
+  `node:20`, `python:3.12`, `eclipse-temurin:17` — they carry more QEMU
+  compatibility gaps.
+- **SELinux `:z` on host-path volume mounts**: added to any docker-compose
+  entry mounting a host path (`./...` or `../...`), on RHEL 10 with SELinux
+  enforcing.
 
 Things it does **not** check, that you should sanity-check yourself for
 Group 4 connectors: whether the service is JIT-heavy enough that QEMU is a

@@ -44,17 +44,26 @@ Ask the user (if not already given):
 
 ## Procedure
 
-1. **Dry-run audit — safe to run from any machine.** Run:
+1. **Audit AND fix in one pass — proactive by default, not reactive.**
+   Always run with `--apply-fixes` from the start; don't do a bare dry-run
+   first and only fix things after seeing them fail on the VM later — that
+   wastes a VM cycle on something already known and fixable ahead of time:
    ```
-   bash scripts/s390x/certify-connector.sh <connector-dir>
+   bash scripts/s390x/certify-connector.sh <connector-dir> --apply-fixes
    ```
-   This reports (a) the connector's group from `scripts/s390x/connector-groups.txt`,
-   (b) whether QEMU is registered *on whatever host this command runs on* —
-   if that's not the s390x VM, this will correctly report "not s390x,
-   skipping," which is expected and not a real check yet — and (c) any custom
-   Docker builds with known issues (missing `--platform=linux/amd64`, missing
-   `OPENSSL_ia32cap=0x0` on HTTPS `RUN` steps, EOL base images, missing `:z`
-   SELinux relabels on docker-compose volume mounts).
+   This proactively applies every deterministic fix across every
+   `docker-compose*.yml` and custom-build Dockerfile in the connector
+   directory: `--platform=linux/amd64` on any image with no s390x manifest
+   (both Dockerfile `FROM` lines and compose `image:` fields), `OPENSSL_ia32cap=0x0`
+   on HTTPS-fetching Dockerfile `RUN` steps, `:z` on host-path volume mounts,
+   and EOL base image bumps (`node:14`→`20`, `python:3.8`→`3.12`,
+   `openjdk:11`→`eclipse-temurin:17`). It also reports the connector's group
+   from `scripts/s390x/connector-groups.txt` and whether QEMU is registered
+   *on whatever host this command runs on* — if that's not the s390x VM,
+   "not s390x, skipping" is expected and not a real check yet.
+
+   Always review the diff (`git diff`) before committing, even though it's
+   applied automatically — proactive isn't the same as unreviewed.
 
    - If the connector isn't found in `connector-groups.txt`, check
      `s390x-image-analysis.md` for its group manually before proceeding — if
@@ -63,24 +72,16 @@ Ask the user (if not already given):
    - If it's a QEMU high-risk service (Oracle XE, SAP HANA — see the design
      doc's Group 3b), tell the user upfront that QEMU is best-effort and the
      outcome is uncertain, so they can decide whether to spend time on it.
-
-2. **Apply the safe fixes.**
-   - Dockerfile fixes (`--platform`, `OPENSSL_ia32cap`) are safe to apply
-     automatically: re-run with `--apply-fixes`, or apply them yourself with
-     the Edit tool if you want to review each change first — the script's
-     dry-run output tells you the exact line and fix.
-   - `:z` SELinux relabels on docker-compose volume mounts are flagged but
-     *not* auto-applied (YAML volume syntax varies too much to safely
-     regex-rewrite) — read the flagged file and add `:z` (or `,z` if other
-     options are already present) to each host-mounted volume entry yourself
-     with the Edit tool.
-   - Image-version bumps (e.g. `prom/prometheus:v2.11.1` → `v2.53.0`,
-     `cassandra:3.0` → `cassandra:4.1`) aren't auto-detected — if the group
-     lookup says Group 2 ("minor image version change needed"), check
+   - One thing still isn't auto-fixed: image-version bumps (e.g.
+     `prom/prometheus:v2.11.1` → `v2.53.0`, `cassandra:3.0` → `cassandra:4.1`)
+     for Group 2 connectors, since the target version is a judgment call, not
+     a deterministic rewrite. If the group lookup says Group 2, check
      `s390x-image-analysis.md` for the target version and edit
-     `docker-compose*.yml` directly.
+     `docker-compose*.yml` yourself.
+   - Re-running `--apply-fixes` is safe and idempotent — already-fixed lines
+     report "OK", not "FIX NEEDED" again.
 
-3. **Run the test — this is where the VM matters.** If you have the user's
+2. **Run the test — this is where the VM matters.** If you have the user's
    `~/.ssh/config` alias for the VM (from Inputs), pass it via `--host` and
    the script handles syncing the repo and running remotely for you:
    ```
@@ -135,13 +136,13 @@ Ask the user (if not already given):
      first to accept its host key. Do not suggest disabling host key checking
      to work around this — that removes protection against a spoofed host.
 
-4. **Diagnose and iterate.** On failure, the script matches the log against
+3. **Diagnose and iterate.** On failure, the script matches the log against
    the Section 5.5 diagnostic table and prints a cause + fix. Apply the fix,
    re-run, repeat. If a failure doesn't match any known pattern, read the
    captured log yourself (path printed by the script) before guessing —
    don't apply speculative fixes to a failure you haven't actually read.
 
-5. **Once it passes**, walk the user through wrapping up (see
+4. **Once it passes**, walk the user through wrapping up (see
    `connect/CERTIFYING_S390X.md` "Wrap up" section):
    - Confirm they're on a personal branch off the `s390x` base branch (not
      directly on `s390x` or `master`).
