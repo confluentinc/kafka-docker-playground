@@ -119,6 +119,12 @@ real risk:
   Vault access unblocks the Semaphore path (see the top of this doc), which
   removes the shared-VM exposure entirely.
 
+**Also set a unique `AWS_BUCKET_NAME`.** `s3-sink.sh` defaults to
+`pg-bucket-${USER}` if you don't set one — but the shared login means `$USER`
+is the *same* value for every SME on that VM, so two people running the
+default at once will collide on one bucket. Export and forward your own
+`AWS_BUCKET_NAME` (add it to the `--forward-env` list above) to avoid this.
+
 ## 2. Branch strategy
 
 - All the common framework fixes (CP image defaults, `:z` SELinux labels,
@@ -209,6 +215,8 @@ automatically; here it is for quick reference:
 | `Permission denied` on a mounted file/dir | SELinux blocking the volume mount | Add `:z` to the volume entry |
 | `cannot prompt without a TTY` on image pull | Podman short-name mode is `enforced` | Set `short-name-mode = "permissive"` in `/etc/containers/registries.conf` |
 | `Bad PSW` from the QEMU binary | Wrong QEMU binary (`tonistiigi/binfmt`) | Re-run `setup-vm.sh` for the Debian bookworm build |
+| Schema Registry crash-loops on a fresh environment | Kafka auto-creates `_schemas` with the default `delete` cleanup policy before Schema Registry's own explicit `compact`-policy create call lands; QEMU's slower timing means the race reliably goes the wrong way | See the s390x-gated pre-emptive fix in `connect-aws-s3-sink/s3-sink.sh` (force the topic config before Schema Registry retries) — apply the same pattern to any other connector test hitting this |
+| Disk full from an old, still-running process | An orphaned container/JVM process from a previous SME's session was never cleaned up | `pkill` does not take a PID (only a process name) — use `kill <pid>` to actually stop it, then check for other stale processes before assuming the disk itself is the problem |
 
 If nothing matches, read the actual log before guessing — don't apply
 speculative fixes to a failure you haven't read.

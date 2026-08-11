@@ -790,6 +790,18 @@ function remove_partition() {
 }
 
 function aws() {
+    local aws_cli_platform_flag=""
+    local aws_cli_ssl_env_flag=""
+    if [ "$(uname -m)" = "s390x" ]
+    then
+      # amazon/aws-cli has no s390x manifest, run it emulated via QEMU
+      aws_cli_platform_flag="--platform linux/amd64"
+      # QEMU's AES-NI emulation produces invalid TLS records ("record layer
+      # failure") on HTTPS requests; disabling OpenSSL's CPU-feature
+      # detection forces a software fallback that avoids the bug (see
+      # connect/CERTIFYING_S390X.md diagnostic table)
+      aws_cli_ssl_env_flag="-e OPENSSL_ia32cap=0x0"
+    fi
     if [ ! -z "$AWS_REGION" ]
     then
       if [ ! -f $HOME/.aws/config ]
@@ -816,9 +828,9 @@ EOF
       # log "💭 Using environment variables AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"
       if [ -f $aws_tmp_dir/config ]
       then
-        docker run --quiet --rm -iv $aws_tmp_dir/config:/root/.aws/config -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" -e AWS_SESSION_TOKEN="$AWS_SESSION_TOKEN" -v $(pwd):/aws -v /tmp:/tmp amazon/aws-cli "$@"
+        docker run --quiet --rm $aws_cli_platform_flag $aws_cli_ssl_env_flag -iv $aws_tmp_dir/config:/root/.aws/config -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" -e AWS_SESSION_TOKEN="$AWS_SESSION_TOKEN" -v $(pwd):/aws -v /tmp:/tmp amazon/aws-cli "$@"
       else
-        docker run --quiet --rm -iv $HOME/.aws/config:/root/.aws/config -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" -e AWS_SESSION_TOKEN="$AWS_SESSION_TOKEN" -v $(pwd):/aws -v /tmp:/tmp amazon/aws-cli "$@"
+        docker run --quiet --rm $aws_cli_platform_flag $aws_cli_ssl_env_flag -iv $HOME/.aws/config:/root/.aws/config -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" -e AWS_SESSION_TOKEN="$AWS_SESSION_TOKEN" -v $(pwd):/aws -v /tmp:/tmp amazon/aws-cli "$@"
       fi
     else
       if [ ! -f $HOME/.aws/credentials ]
@@ -826,7 +838,7 @@ EOF
         logerror "❌ $HOME/.aws/credentials does not exist"
       else
         # log "💭 AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are set based on $HOME/.aws/credentials"
-        docker run --quiet --rm -iv $HOME/.aws:/root/.aws -v $(pwd):/aws -v /tmp:/tmp amazon/aws-cli "$@"
+        docker run --quiet --rm $aws_cli_platform_flag $aws_cli_ssl_env_flag -iv $HOME/.aws:/root/.aws -v $(pwd):/aws -v /tmp:/tmp amazon/aws-cli "$@"
       fi
     fi
 }

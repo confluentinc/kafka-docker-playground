@@ -30,7 +30,7 @@ then
 fi
 
 QEMU_BINARY=/usr/local/bin/qemu-x86_64-static
-QEMU_DEB_URL="https://ftp.debian.org/debian/pool/main/q/qemu/qemu-user-static_7.2+dfsg-7+deb12u18+b1_s390x.deb"
+QEMU_DEB_POOL_URL="https://ftp.debian.org/debian/pool/main/q/qemu/"
 
 log "step 1/3: QEMU user-mode static binary (Debian 12 bookworm build)"
 # NOTE: tonistiigi/binfmt is deliberately NOT used here — its QEMU binary
@@ -39,9 +39,25 @@ if [ -x "$QEMU_BINARY" ] && "$QEMU_BINARY" --version 2>/dev/null | grep -q "7.2"
 then
     log "  qemu-x86_64-static 7.2 already installed at ${QEMU_BINARY}, skipping download"
 else
+    # Debian's pool only keeps the LATEST rebuild of a given point release --
+    # a hardcoded filename here has already rotted once (+b1 pruned, replaced
+    # by +b3, with no redirect). Look up whatever the current 7.2.x s390x
+    # build actually is instead of pinning an exact filename that will go
+    # stale again. (A fully immutable alternative is snapshot.debian.org, at
+    # the cost of never picking up point-release security fixes within 7.2 --
+    # not used here since the failure mode we've actually hit is pruning, not
+    # a need for a frozen snapshot.)
+    QEMU_DEB_FILENAME=$(curl -fsL "$QEMU_DEB_POOL_URL" | grep -oE 'qemu-user-static_7\.2[^"]*_s390x\.deb' | sort -V | tail -1)
+    if [ -z "$QEMU_DEB_FILENAME" ]
+    then
+        logerror "could not find a qemu-user-static 7.2.x s390x package at ${QEMU_DEB_POOL_URL}"
+        logerror "check that URL manually -- Debian may have moved past the 7.2 line entirely"
+        exit 1
+    fi
+    log "  found ${QEMU_DEB_FILENAME} in the Debian pool"
     TMP_DEB="$(mktemp /tmp/qemu.XXXXXX.deb)"
     TMP_EXTRACT="$(mktemp -d /tmp/qemu-extracted.XXXXXX)"
-    curl -fL -o "$TMP_DEB" "$QEMU_DEB_URL"
+    curl -fL -o "$TMP_DEB" "${QEMU_DEB_POOL_URL}${QEMU_DEB_FILENAME}"
     dpkg-deb -x "$TMP_DEB" "$TMP_EXTRACT"
     cp "${TMP_EXTRACT}/usr/bin/qemu-x86_64-static" "$QEMU_BINARY"
     chmod +x "$QEMU_BINARY"
@@ -76,6 +92,18 @@ then
     log "  updated short-name-mode to permissive in ${REGISTRIES_CONF}"
 else
     logwarn "  no short-name-mode setting found in ${REGISTRIES_CONF}, leaving untouched — verify manually if image pulls prompt for a registry"
+fi
+
+# KDP images (confluentinc/*, vdesabou/*, ...) are referenced by short name
+# throughout the repo's docker-compose files and Dockerfiles; without this,
+# podman refuses to resolve them ("no unqualified-search registries are
+# defined").
+if grep -qE '^\s*unqualified-search-registries\s*=' "$REGISTRIES_CONF" 2>/dev/null
+then
+    log "  unqualified-search-registries already set, skipping"
+else
+    echo 'unqualified-search-registries = ["docker.io"]' >> "$REGISTRIES_CONF"
+    log "  added unqualified-search-registries = [\"docker.io\"] to ${REGISTRIES_CONF}"
 fi
 
 log "verification:"

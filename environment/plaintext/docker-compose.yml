@@ -644,6 +644,9 @@ services:
 
   grafana:
     image: grafana/grafana:8.5.27
+    # grafana/grafana has no s390x manifest, run it emulated via QEMU
+    # (see connect/CERTIFYING_S390X.md)
+    platform: linux/amd64
     hostname: grafana
     container_name: grafana
     profiles:
@@ -662,6 +665,9 @@ services:
 
   kcat:
     image: confluentinc/cp-kcat:latest
+    # cp-kcat has no s390x manifest, run it emulated via QEMU
+    # (see connect/CERTIFYING_S390X.md)
+    platform: linux/amd64
     hostname: kcat
     container_name: kcat
     depends_on:
@@ -683,6 +689,9 @@ services:
 
   conduktor-console:
     image: conduktor/conduktor-console:1.30.0
+    # conduktor/conduktor-console has no s390x manifest, run it emulated via
+    # QEMU (see connect/CERTIFYING_S390X.md)
+    platform: linux/amd64
     hostname: conduktor-console
     container_name: conduktor-console
     depends_on:
@@ -698,6 +707,9 @@ services:
 
   conduktor-monitoring:
     image: conduktor/conduktor-console-cortex:1.30.0
+    # conduktor/conduktor-console-cortex has no s390x manifest, run it
+    # emulated via QEMU (see connect/CERTIFYING_S390X.md)
+    platform: linux/amd64
     hostname: conduktor-monitoring
     container_name: conduktor-monitoring
     environment:
@@ -710,6 +722,9 @@ services:
     hostname: pyroscope
     container_name: pyroscope
     image: pyroscope/pyroscope:0.37.2
+    # pyroscope/pyroscope has no s390x manifest, run it emulated via QEMU
+    # (see connect/CERTIFYING_S390X.md)
+    platform: linux/amd64
     profiles:
       - "grafana"
     ports:
