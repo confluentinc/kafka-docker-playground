@@ -523,7 +523,7 @@ fi
 LOG_FILE="$(mktemp /tmp/certify-s390x.XXXXXX.log)"
 log "running: bash connect/${CONNECTOR_DIR}/${TEST_SCRIPT}  (log: ${LOG_FILE})"
 set +e
-(cd "$CONNECT_PATH" && bash "$TEST_SCRIPT_PATH") > "$LOG_FILE" 2>&1
+(cd "$CONNECT_PATH" && bash "./$TEST_SCRIPT") > "$LOG_FILE" 2>&1
 TEST_STATUS=$?
 set -e
 

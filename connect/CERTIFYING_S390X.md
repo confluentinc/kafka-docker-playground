@@ -1,18 +1,22 @@
 # Certifying a connector on s390x — SME one-pager
 
-Status as of 2026-08-10. Source docs (fuller detail, read if something here
+Status as of 2026-08-11. Source docs (fuller detail, read if something here
 is unclear): *s390x Connector Certification — Current Status and Path
 Forward* and *Automated Testing: Connector Certification on s390x
 architecture*.
 
-**Near-term path: VM-based, not Semaphore.** Semaphore capacity was just
-resolved (10 agents), but Vault access is still blocked, so any test needing
-secrets can't run there yet. Until that lands, certification happens on the
-3 shared s390x VMs described below. A POC pipeline already exists in
-`connect-ci-cd-pipelines` ([PR #213](https://github.com/confluentinc/connect-ci-cd-pipelines/pull/213))
-and will take over as the primary path once Vault access is available and
-the POC is generalized beyond its current single-connector scope — that work
-happens in that repo, not here.
+**Near-term path: still VM-based, not Semaphore yet.** Both prerequisites
+for the Semaphore path are now resolved — capacity (10 agents, DP-19829) and
+Vault access for the s390x pool (DP-19746). A standalone pipeline,
+`run_cp_connector_selected_tests_s390x.yml`, is landing in
+`connect-ci-cd-pipelines` to validate that for real: it runs one connector
+test (`DatagenSourceTest`) against a live s390x agent, restoring the
+Vault/AWS-credential step the earlier POC ([PR #213](https://github.com/confluentinc/connect-ci-cd-pipelines/pull/213))
+had to skip. Once that's proven green and a couple more connectors have run
+through it, it'll be extended to the full in-scope connector list (the
+`tests-s390x.txt` design below) and take over as the primary path — that
+work happens in that repo, not here. Until then, certification for every
+other connector continues on the 3 shared s390x VMs described below.
 
 ## 1. Get a VM and set it up (once per VM)
 
@@ -143,8 +147,10 @@ real risk:
   if it's seen, it expires soon and can't do much.
 - Treat any credential used this way as burned after the run if it's a
   long-lived key you can't easily rotate — this workflow is a stopgap until
-  Vault access unblocks the Semaphore path (see the top of this doc), which
-  removes the shared-VM exposure entirely.
+  the Semaphore path (see the top of this doc) is validated for credentialed
+  connectors and takes over, which removes the shared-VM exposure entirely.
+  Vault access being live is necessary for that but not sufficient by
+  itself — the pipeline still needs to prove it end-to-end first.
 
 **Watch for `$USER`-derived resource names.** Several connector scripts
 (e.g. `connect-aws-s3-sink/s3-sink.sh` defaults to `pg-bucket-${USER}`)

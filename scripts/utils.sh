@@ -1,6 +1,21 @@
 DIR_UTILS="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
 source ${DIR_UTILS}/../scripts/cli/src/lib/utils_function.sh
 
+function confluent_hub_install_chown_suffix {
+  # Rootless Podman maps a container's UID 0 to the invoking host user, so
+  # files written by "docker run -u0" already land correctly owned -- no
+  # chown needed. Chowning to the literal host UID/GID from inside that same
+  # rootless container re-maps through /etc/subuid/subgid instead of writing
+  # it literally, handing the tree to an unrelated subuid-shifted owner the
+  # host user can then no longer read or write.
+  if command -v podman >/dev/null 2>&1 && [ "$(podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null)" = "true" ]
+  then
+    echo ""
+  else
+    echo " && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components"
+  fi
+}
+
 function cleanup-workaround-file {
   rm -f /tmp/without-cli-workaround > /dev/null 2>&1
 }
@@ -455,10 +470,11 @@ then
               sudo rm -rf ${DIR_UTILS}/../confluent-hub
             fi
             mkdir -p ${DIR_UTILS}/../confluent-hub
+            chmod 755 ${DIR_UTILS}/../confluent-hub
           fi
           log "🎱 Installing connector $owner/$name:$CONNECTOR_VERSION"
           set +e
-          docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components:z ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt $owner/$name:$CONNECTOR_VERSION && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components" > /tmp/result.log 2>&1
+          docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components:z ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt $owner/$name:$CONNECTOR_VERSION$(confluent_hub_install_chown_suffix)" > /tmp/result.log 2>&1
           if [ $? != 0 ]
           then
               logerror "❌ failed to install connector $owner/$name:$CONNECTOR_VERSION"
@@ -581,6 +597,7 @@ else
           sudo rm -rf ${DIR_UTILS}/../confluent-hub
         fi
         mkdir -p ${DIR_UTILS}/../confluent-hub
+        chmod 755 ${DIR_UTILS}/../confluent-hub
 
         for connector_path in ${connector_paths//,/ }
         do
@@ -620,7 +637,7 @@ else
 
               log "🎱 Installing connector from zip $connector_zip_name"
               set +e
-              docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components:z  -v /tmp:/tmp:z ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt /tmp/${connector_zip_name} && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components" > /tmp/result.log 2>&1
+              docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components:z  -v /tmp:/tmp:z ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt /tmp/${connector_zip_name}$(confluent_hub_install_chown_suffix)" > /tmp/result.log 2>&1
               if [ $? != 0 ]
               then
                   logerror "❌ failed to install connector from zip $connector_zip_name"
@@ -663,7 +680,7 @@ else
 
             log "🎱 Installing connector $owner/$name:$version_to_get_from_hub"
             set +e
-            docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components:z ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt $owner/$name:$version_to_get_from_hub && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components" > /tmp/result.log 2>&1
+            docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components:z ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt $owner/$name:$version_to_get_from_hub$(confluent_hub_install_chown_suffix)" > /tmp/result.log 2>&1
             if [ $? != 0 ]
             then
                 logerror "❌ failed to install connector $owner/$name:$version_to_get_from_hub"
