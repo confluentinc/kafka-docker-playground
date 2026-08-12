@@ -175,11 +175,14 @@ Ask the user (if not already given):
 
 4. **Once it passes**, walk the user through wrapping up (see
    `connect/CERTIFYING_S390X.md` "Wrap up" section):
-   - Confirm they're on a personal branch off the `s390x` base branch (not
-     directly on `s390x` or `master`).
-   - Remind them to open the KDP PR against `s390x`, not `master` — purely
-     s390x-specific workarounds stay on `s390x` permanently; anything with
-     backwards-compatible value gets cherry-picked to `master` separately.
+   - Confirm they're on a personal branch off `s390x-base` (not directly on
+     `s390x-base`, `s390x-cert-tooling`, or `master` — `s390x-cert-tooling`
+     is this skill's own home, not something a connector branch should sit
+     on top of).
+   - Remind them to open the KDP PR against `s390x-base`, not `master` —
+     purely s390x-specific workarounds stay on `s390x-base` permanently;
+     anything with backwards-compatible value gets cherry-picked to
+     `master` separately.
    - Separately, the connector's test needs registering (owner + path) in
      `connect-ci-cd-pipelines`'s `cp-connector-tests/tests.txt` — that's the
      real, shared CI test list, in a different repo. This skill doesn't do

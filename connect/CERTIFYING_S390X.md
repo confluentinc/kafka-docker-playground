@@ -165,14 +165,31 @@ AWS_BUCKET_NAME` will help.
 ## 2. Branch strategy
 
 - All the common framework fixes (CP image defaults, `:z` SELinux labels,
-  `podman-compose --quiet` probe, etc.) live on the `s390x` base branch.
-  Branch off **that**, not `master`.
-- Make your connector-specific changes on your personal branch, get the test
-  passing, then PR back to `s390x`.
+  the auto-create-topics/Schema Registry race fix, the kcat s390x fallback,
+  etc.) live on `s390x-base`. Branch your connector-specific work off
+  **that**, not `master` — `s390x-base` has no dependency on the
+  certification tooling below, so it's the right branch point even if
+  you're not using the skill/script.
+- This certification tooling (`certify-connector.sh`, `setup-vm.sh`,
+  `connector-groups.txt`, this doc, the Claude Code skill) lives on
+  `s390x-cert-tooling`, branched from `s390x-base`. It's a convenience layer
+  for running the checklist, not something a connector branch needs to
+  contain — merge or rebase it in locally if you want the script/skill
+  available, but don't build your connector-specific branch on top of it.
+- Make your connector-specific changes on a personal branch off
+  `s390x-base`, get the test passing, then PR back to `s390x-base`.
 - Purely s390x-specific workarounds (QEMU flags, platform pins) stay on
-  `s390x` permanently. Anything with general backwards-compatible value
+  `s390x-base` permanently. Anything with general backwards-compatible value
   (e.g. a genuine bug fix) gets cherry-picked to `master` separately — flag
   it in your PR description if you think something qualifies.
+- Note: `podman-compose`'s lack of `--quiet` support on `build` is a known
+  issue (see Lineage 1 history) but is **not yet fixed on `s390x-base`** —
+  the fix was skipped because the file snapshot `s390x-base` forked from
+  didn't have `--quiet` on that line at all, so applying the old patch
+  would have silently changed unrelated behavior. If you hit
+  `unknown flag: --quiet` on a podman-compose host, that's why — re-add the
+  probe-based guard properly against current file content before relying
+  on it.
 
 ## 3. Find your connector's group
 
@@ -271,6 +288,7 @@ automatically; here it is for quick reference:
 | `Bad PSW` from the QEMU binary | Wrong QEMU binary (`tonistiigi/binfmt`) | Re-run `setup-vm.sh` for the Debian bookworm build |
 | Schema Registry crash-loops on a fresh environment | **Confirmed via a clean A/B re-test on a real s390x VM** (same VM, same connector, with the fix present vs absent): removing the auto-create gate reliably makes the test fail, restoring it reliably makes it pass. Root cause: Kafka auto-creates `_schemas` with the default `delete` cleanup policy, racing Schema Registry's own explicit `compact`-policy create call on startup. The *exact* trigger for why this race goes the wrong way on s390x (a working theory is Podman's CNI+dnsname DNS stack being slower than Docker's native bridge+DNS) is still not independently confirmed — what's confirmed is that the fix is necessary, not just plausible. | Handled automatically: `KAFKA_AUTO_CREATE_TOPICS_ENABLE` defaults to `false` on s390x for the startup window (`scripts/utils.sh`), then `re_enable_auto_create_topics` (`scripts/cli/src/lib/utils_function.sh`, called from `environment/plaintext/start.sh`) turns it back on once Schema Registry is confirmed up. No per-connector fix needed. |
 | Disk full from an old, still-running process | An orphaned container/JVM process from a previous SME's session was never cleaned up | `pkill` does not take a PID (only a process name) — use `kill <pid>` to actually stop it, then check for other stale processes before assuming the disk itself is the problem |
+| `no image found in manifest list for architecture s390x` for `confluentinc/cp-kcat`, in a **ccloud-environment** test | `cp-kcat` has no s390x manifest | Handled automatically in `scripts/cli/src/commands/topic/get-number-records.sh`: on s390x, falls back to the connect image (which ships kcat) instead of `cp-kcat`. Only covers that one ad-hoc kcat container — the standing `kcat` service in `environment/plaintext/docker-compose.yml` is handled separately via the `platform: linux/amd64` QEMU pin above. Note: the plaintext-environment path most certification runs use never touches kcat at all (it execs into the broker container directly), so this fix is currently only relevant if you're running ccloud-mode tests on s390x. |
 
 If nothing matches, read the actual log before guessing — don't apply
 speculative fixes to a failure you haven't read.
