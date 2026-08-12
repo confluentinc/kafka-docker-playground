@@ -41,6 +41,14 @@ services:
       KAFKA_ADVERTISED_LISTENERS: BROKER://broker:9092,HOST://localhost:29092
       KAFKA_INTER_BROKER_LISTENER_NAME: BROKER
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      # CONFIRMED via a clean A/B re-test on a real s390x VM (this gate
+      # present vs absent, same VM, same connector): without it, Schema
+      # Registry crash-loops on a fresh environment. On s390x this defaults
+      # to false for the startup window and is flipped back to true once
+      # Schema Registry is confirmed healthy -- see
+      # KAFKA_AUTO_CREATE_TOPICS_ENABLE gating in scripts/utils.sh and
+      # re_enable_auto_create_topics in environment/plaintext/start.sh
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: ${KAFKA_AUTO_CREATE_TOPICS_ENABLE:-true}
       CONFLUENT_SUPPORT_CUSTOMER_ID: 'anonymous'
       # Confluent Metrics Reporter for Control Center Cluster Monitoring
       KAFKA_METRIC_REPORTERS: $KAFKA_METRIC_REPORTERS
@@ -101,6 +109,14 @@ services:
       KAFKA_ADVERTISED_LISTENERS: BROKER://broker2:9092,HOST://localhost:29292
       KAFKA_INTER_BROKER_LISTENER_NAME: BROKER
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      # CONFIRMED via a clean A/B re-test on a real s390x VM (this gate
+      # present vs absent, same VM, same connector): without it, Schema
+      # Registry crash-loops on a fresh environment. On s390x this defaults
+      # to false for the startup window and is flipped back to true once
+      # Schema Registry is confirmed healthy -- see
+      # KAFKA_AUTO_CREATE_TOPICS_ENABLE gating in scripts/utils.sh and
+      # re_enable_auto_create_topics in environment/plaintext/start.sh
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: ${KAFKA_AUTO_CREATE_TOPICS_ENABLE:-true}
       CONFLUENT_SUPPORT_CUSTOMER_ID: 'anonymous'
       # Confluent Metrics Reporter for Control Center Cluster Monitoring
       KAFKA_METRIC_REPORTERS: $KAFKA_METRIC_REPORTERS
@@ -161,6 +177,14 @@ services:
       KAFKA_ADVERTISED_LISTENERS: BROKER://broker3:9092,HOST://localhost:29392
       KAFKA_INTER_BROKER_LISTENER_NAME: BROKER
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      # CONFIRMED via a clean A/B re-test on a real s390x VM (this gate
+      # present vs absent, same VM, same connector): without it, Schema
+      # Registry crash-loops on a fresh environment. On s390x this defaults
+      # to false for the startup window and is flipped back to true once
+      # Schema Registry is confirmed healthy -- see
+      # KAFKA_AUTO_CREATE_TOPICS_ENABLE gating in scripts/utils.sh and
+      # re_enable_auto_create_topics in environment/plaintext/start.sh
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: ${KAFKA_AUTO_CREATE_TOPICS_ENABLE:-true}
       CONFLUENT_SUPPORT_CUSTOMER_ID: 'anonymous'
       # Confluent Metrics Reporter for Control Center Cluster Monitoring
       KAFKA_METRIC_REPORTERS: $KAFKA_METRIC_REPORTERS
@@ -644,6 +668,9 @@ services:
 
   grafana:
     image: grafana/grafana:8.5.27
+    # grafana/grafana has no s390x manifest, run it emulated via QEMU
+    # (see connect/CERTIFYING_S390X.md)
+    platform: linux/amd64
     hostname: grafana
     container_name: grafana
     profiles:
@@ -662,6 +689,9 @@ services:
 
   kcat:
     image: confluentinc/cp-kcat:latest
+    # cp-kcat has no s390x manifest, run it emulated via QEMU
+    # (see connect/CERTIFYING_S390X.md)
+    platform: linux/amd64
     hostname: kcat
     container_name: kcat
     depends_on:
@@ -683,6 +713,9 @@ services:
 
   conduktor-console:
     image: conduktor/conduktor-console:1.30.0
+    # conduktor/conduktor-console has no s390x manifest, run it emulated via
+    # QEMU (see connect/CERTIFYING_S390X.md)
+    platform: linux/amd64
     hostname: conduktor-console
     container_name: conduktor-console
     depends_on:
@@ -698,6 +731,9 @@ services:
 
   conduktor-monitoring:
     image: conduktor/conduktor-console-cortex:1.30.0
+    # conduktor/conduktor-console-cortex has no s390x manifest, run it
+    # emulated via QEMU (see connect/CERTIFYING_S390X.md)
+    platform: linux/amd64
     hostname: conduktor-monitoring
     container_name: conduktor-monitoring
     environment:
@@ -710,6 +746,9 @@ services:
     hostname: pyroscope
     container_name: pyroscope
     image: pyroscope/pyroscope:0.37.2
+    # pyroscope/pyroscope has no s390x manifest, run it emulated via QEMU
+    # (see connect/CERTIFYING_S390X.md)
+    platform: linux/amd64
     profiles:
       - "grafana"
     ports:
