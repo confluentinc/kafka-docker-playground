@@ -279,15 +279,12 @@ function maybe_create_image()
         fi
       elif [ "$(uname -m)" = "s390x" ]
       then
-        if version_gt $TAG_BASE "8.0.99"
-        then
-          CONNECT_3RDPARTY_INSTALL="if [ ! -f /tmp/done ]; then microdnf -y install bind-utils openssl unzip findutils net-tools nc jq which iptables libmnl krb5-workstation krb5-libs vim && microdnf clean all  && touch /tmp/done; fi"
-        elif version_gt $TAG_BASE "7.9.9"
-        then
-          CONNECT_3RDPARTY_INSTALL="if [ ! -f /tmp/done ]; then yum -y install bind-utils openssl unzip findutils net-tools nc jq which iptables libmnl krb5-workstation krb5-libs vim && yum clean all && rm -rf /var/cache/yum && rpm -i --nosignature https://yum.oracle.com/repo/OracleLinux/OL9/appstream/s390x/getPackage/tcpdump-4.99.0-9.el9.s390x.rpm && touch /tmp/done; fi"
-        else
-          CONNECT_3RDPARTY_INSTALL="if [ ! -f /tmp/done ]; then yum -y install --disablerepo='Confluent*' bind-utils openssl unzip findutils net-tools nc jq which iptables libmnl krb5-workstation krb5-libs vim && yum clean all && rm -rf /var/cache/yum && rpm -i --nosignature https://yum.oracle.com/repo/OracleLinux/OL8/appstream/s390x/getPackage/tcpdump-4.9.3-3.el8.s390x.rpm && touch /tmp/done; fi"
-        fi
+        # Confluent has never published a CP image for s390x below 8.2, so
+        # the pre-8.1 yum/tcpdump-RPM tiers that exist for arm64/x86_64 above
+        # can't apply here -- a running s390x image guarantees CP 8.2+ and
+        # microdnf, and that base image already carries tcpdump via its own
+        # repos (no separate RPM download needed, unlike the older tiers).
+        CONNECT_3RDPARTY_INSTALL="if [ ! -f /tmp/done ]; then microdnf -y install bind-utils openssl unzip findutils net-tools nc jq which iptables libmnl krb5-workstation krb5-libs vim && microdnf clean all && touch /tmp/done; fi"
       else
         if version_gt $TAG_BASE "7.9.9"
         then
