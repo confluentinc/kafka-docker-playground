@@ -2,6 +2,6 @@
 services:
   connect:
     volumes:
-        - ../../connect/connect-gcp-gcs-source/keyfile.json:/tmp/keyfile.json:ro
+        - ../../connect/connect-gcp-gcs-source/keyfile.json:/tmp/keyfile.json:ro,z
     environment:
       CONNECT_PLUGIN_PATH: /usr/share/confluent-hub-components/confluentinc-kafka-connect-gcs-source,/usr/share/confluent-hub-components/confluentinc-kafka-connect-gcs
