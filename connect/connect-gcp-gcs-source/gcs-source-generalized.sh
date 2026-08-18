@@ -102,7 +102,13 @@ playground connector create-or-update --connector gcs-source  << EOF
 }
 EOF
 
-sleep 10
+# s390x: the source connector's first poll (gcs.poll.interval.ms=60000) + GCS
+# read + produce is slower than amd64; wait past the first poll so
+# quick-start-topic exists and has records before the verify. Otherwise the
+# message-count helper returns empty and the consume check errors out instantly.
+SETTLE_SLEEP=10
+if [ "$(uname -m)" = "s390x" ]; then SETTLE_SLEEP=90; fi
+sleep $SETTLE_SLEEP
 
 # s390x polls/reads GCS more slowly (connector is native s390x but the arch is
 # 2-5x slower per the certification guide); give the source connector more time
