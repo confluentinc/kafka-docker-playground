@@ -8,7 +8,12 @@
 # purely a quick "what group is this connector in" reference. Re-evaluate
 # whether this file is worth keeping in sync as certification progresses.
 #
-# Full rationale / images / blockers per connector: see s390x-image-analysis.md.
+# Full rationale / images / blockers per connector: see Appendix A of the
+# "s390x KDP Testing - Certification guide for SMEs" page on Confluence,
+# which is the authoritative per-connector list. This file is a local mirror
+# for the tooling to grep against; if a connector's group here ever
+# disagrees with Appendix A (or is missing from one but not the other),
+# Confluence wins and this file should be corrected to match.
 #
 # Groups:
 #   Cloud/SaaS - calls a real cloud API, no local service container to run
@@ -95,7 +100,7 @@ connect-tibco-source: Group 3
 connect-appdynamics-metrics-sink: Group 3
 connect-pivotal-gemfire-sink: Group 3
 # Netezza Sink, Teradata Source, Teradata Sink: Group 3 (licensed) per
-# s390x-image-analysis.md, but no connect-netezza-* / connect-teradata-*
+# Confluence Appendix A, but no connect-netezza-* / connect-teradata-*
 # directory exists anywhere in this repo — never implemented here.
 connect-hdfs3-sink: Group 4
 connect-hdfs3-source: Group 4

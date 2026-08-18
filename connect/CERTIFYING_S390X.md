@@ -1,34 +1,237 @@
 # Certifying a connector on s390x — SME one-pager
 
-Status as of 2026-08-11. Source docs (fuller detail, read if something here
+Status as of 2026-08-14. Source docs (fuller detail, read if something here
 is unclear): *s390x Connector Certification — Current Status and Path
 Forward* and *Automated Testing: Connector Certification on s390x
 architecture*.
 
-**Near-term path: still VM-based, not Semaphore yet.** Both prerequisites
-for the Semaphore path are now resolved — capacity (10 agents, DP-19829) and
-Vault access for the s390x pool (DP-19746). A standalone pipeline,
-`run_cp_connector_selected_tests_s390x.yml`, is landing in
-`connect-ci-cd-pipelines` to validate that for real: it runs one connector
-test (`DatagenSourceTest`) against a live s390x agent, restoring the
-Vault/AWS-credential step the earlier POC ([PR #213](https://github.com/confluentinc/connect-ci-cd-pipelines/pull/213))
-had to skip. Once that's proven green and a couple more connectors have run
-through it, it'll be extended to the full in-scope connector list (the
-`tests-s390x.txt` design below) and take over as the primary path — that
-work happens in that repo, not here. Until then, certification for every
-other connector continues on the 3 shared s390x VMs described below.
+**Default path: the Semaphore pipeline.** `run-cp-connector-selected-tests-s390x`
+(added via [PR #223](https://github.com/confluentinc/connect-ci-cd-pipelines/pull/223)
+to `connect-ci-cd-pipelines`) runs on the real `s1-ubuntu-24-s390x-4` agent
+pool (capacity from DP-19829) with proper Vault access (DP-19746) already
+wired in — no shared VM, no manual credential juggling, no `--host`/
+`--forward-env`. For any connector whose test is already registered in
+`cp-connector-tests/tests.txt`, this is the certification path: see section 4.
 
-## 1. Get a VM and set it up (once per VM)
+The 3 shared s390x VMs (section 5) are now the **fallback**, for cases the
+pipeline can't cover on its own:
+- A connector's test isn't registered in `tests.txt` yet.
+- Group 3b (QEMU high-risk) connectors where you want fast, interactive
+  iteration rather than a full pipeline round-trip per attempt.
+- The pipeline itself is down, at capacity, or flaky.
+
+**Registering a test in `tests.txt` is a separate, out-of-scope effort from
+certification itself** — this doc and the `/certify-s390x` skill get a
+connector running successfully on s390x (via the VM if unregistered, via
+Semaphore if registered); they don't onboard it into the shared CI test
+list. If you also want that done, that's the `kdp-cp-validation-onboard-test`
+Claude Code skill, a separate task from what's below.
+
+## 1. Find your connector's group
+
+Check `scripts/s390x/connector-groups.txt` first — it's a simple local
+reference classifying the 85 in-scope connectors (not a CI artifact; see the
+file's header). If yours isn't listed, check Appendix A of the [SME
+certification guide on Confluence](https://confluentinc.atlassian.net/wiki/spaces/~62ee260c3cc20c06c8afd0ff/pages/6042779888/s390x+KDP+Testing+-+Certification+guide+for+SMEs#Appendix-A:-Connector-groups),
+which is the authoritative per-connector list. If it's missing from both,
+that's a real stop — ask the team rather than guessing a group, and add it
+to `connector-groups.txt` once you know the answer so the next SME doesn't
+re-ask.
+
+| Group | What it means | Your effort |
+|---|---|---|
+| Cloud/SaaS | Calls a real cloud API, no local service container | Lowest — usually just run it |
+| Group 1/2 (ready / minor fix) | Service image already has an s390x manifest, or needs a version bump | Low — check Appendix A on Confluence (linked above) for the target image tag |
+| Group 4 (QEMU viable) | No native s390x image, but QEMU emulation works for functional testing | Medium — expect 2-5x slower runs, some debugging |
+| Group 3b (QEMU high-risk, e.g. Oracle XE, SAP HANA) | JIT-heavy service, QEMU likely unstable | High, uncertain outcome — best-effort only, don't sink days into it |
+| Group 3 (licensed, no public image) | Needs out-of-band image provisioning | Manual — talk to the team before starting, this isn't a script problem |
+
+## 2. Branch strategy
+
+- All the common framework fixes (CP image defaults, `:z` SELinux labels,
+  the auto-create-topics/Schema Registry race fix, the kcat s390x fallback,
+  etc.) live on `s390x-base`. Branch your connector-specific work off
+  **that**, not `master` — `s390x-base` has no dependency on the
+  certification tooling below, so it's the right branch point even if
+  you're not using the skill/script.
+- This certification tooling (`certify-connector.sh`, `setup-vm.sh`,
+  `connector-groups.txt`, this doc, the Claude Code skill) lives on
+  `s390x-cert-tooling`, branched from `s390x-base`. It's a convenience layer
+  for running the checklist, not something a connector branch needs to
+  contain — merge or rebase it in locally if you want the script/skill
+  available, but don't build your connector-specific branch on top of it.
+- Make your connector-specific changes on a personal branch off
+  `s390x-base`, get the test passing, then PR back to `s390x-base`.
+- Purely s390x-specific workarounds (QEMU flags, platform pins) stay on
+  `s390x-base` permanently. Anything with general backwards-compatible value
+  (e.g. a genuine bug fix) gets cherry-picked to `master` separately — flag
+  it in your PR description if you think something qualifies.
+- Note: `podman-compose`'s lack of `--quiet` support on `build` is a known
+  issue (see Lineage 1 history) but is **not yet fixed on `s390x-base`** —
+  the fix was skipped because the file snapshot `s390x-base` forked from
+  didn't have `--quiet` on that line at all, so applying the old patch
+  would have silently changed unrelated behavior. If you hit
+  `unknown flag: --quiet` on a podman-compose host, that's why — re-add the
+  probe-based guard properly against current file content before relying
+  on it.
+
+## 3. Audit and fix known issues (before running, either path)
+
+Use the script directly, or drive it through the `/certify-s390x` Claude
+Code skill — but they apply fixes differently, and it matters which one
+you're using:
+
+- **Script's `--apply-fixes`**: mechanical, fixed regex/YAML patterns. Fast
+  and fine for the common cases, but its coverage is exactly as wide as
+  those patterns — a multi-stage Dockerfile, an image behind a build `ARG`,
+  an unusual volume line can slip past it silently.
+- **The Claude Code skill**: runs the script *without* `--apply-fixes` for
+  the audit, then reads the flagged files itself and applies fixes with
+  full context, catching things the fixed patterns don't anticipate. If
+  you're working through Claude Code, prefer this over telling it to just
+  run `--apply-fixes`.
+
+Either way, **don't do a plain audit first and only fix things after they
+fail** — that burns a Semaphore pipeline slot or a shared VM cycle on
+something already knowable ahead of time. Fix proactively, before running
+either path.
+
+Using the script's own `--apply-fixes` directly (pure local repo editing,
+no VM or pipeline needed yet):
+
+```
+bash scripts/s390x/certify-connector.sh <connector-dir> --apply-fixes
+```
+
+Always review the diff (`git diff`) before committing — applying
+automatically isn't the same as applying unreviewed. Re-running
+`--apply-fixes` is safe: already-fixed lines report "OK", not "FIX NEEDED"
+again.
+
+Once you're happy with the diff, **commit and push this branch** to
+`confluentinc/kafka-docker-playground` — section 4's `KDP_BRANCH_OVERRIDE`
+needs a pushed branch to point at, and this is also where the Semaphore
+pipeline (if you're on that path) picks up your fixes.
+
+What it fixes automatically (Section 3 of the design doc, condensed):
+
+- **Any image with no s390x manifest** — Dockerfile `FROM` lines in a custom
+  build *and* `image:` fields directly in `docker-compose*.yml` (most
+  connectors don't build their own image at all, so this second case is the
+  one that matters most often): adds `--platform=linux/amd64` /
+  `platform: linux/amd64`.
+- **HTTPS-fetching Dockerfile `RUN` steps** (`npm install`, `pip install`,
+  `apt-get install`, `curl https://...`, etc.): prefixes
+  `OPENSSL_ia32cap=0x0`, or QEMU's AES-NI emulation breaks TLS.
+- **EOL base images** (`node:14`, `python:3.8`, `openjdk:11`): bumped to
+  `node:20`, `python:3.12`, `eclipse-temurin:17` — they carry more QEMU
+  compatibility gaps.
+- **SELinux `:z` on host-path volume mounts**: added to any docker-compose
+  entry mounting a host path (`./...` or `../...`), on RHEL 10 with SELinux
+  enforcing (only relevant for the VM fallback — the Semaphore agent doesn't
+  run with SELinux enforcing).
+
+Things it does **not** check, that you should sanity-check yourself for
+Group 4 connectors: whether the service is JIT-heavy enough that QEMU is a
+bad fit in the first place. If it is, "Manual Testing: Connector
+Certification Guide — s390x" on Confluence covers standing up the target
+service on a real amd64 host and pointing the connector at it externally
+instead of fighting QEMU.
+
+## 4. Run it: the Semaphore pipeline (default)
+
+**Prerequisite: the test must already be registered in `tests.txt`.** The
+pipeline resolves `CP_CONNECT_TESTS_OVERRIDE` by filtering it against
+`cp-connector-tests/tests.txt` in `connect-ci-cd-pipelines` — it can't run a
+test it doesn't know about. **If your connector's test isn't in there yet,
+run it on the shared VM instead (section 5)** — registering it into
+`tests.txt` is a separate, out-of-scope onboarding effort (see the
+`kdp-cp-validation-onboard-test` skill if that's also wanted), not a step in
+certifying this connector.
+
+Once registered, trigger the `run-cp-connector-selected-tests-s390x` task in
+Semaphore directly against `connect-ci-cd-pipelines` with:
+
+- `CP_CONNECT_TESTS_OVERRIDE` (required) — pipe-separated test name(s) from
+  `tests.txt`, e.g. `MysqlSourceTest` or `MysqlSourceTest|SnowflakeSinkTest`.
+- `CP_VERSION` / `RC_IMAGE_TAG` / `NIGHTLY_IMAGE_TAG` / `CP_RELEASE_BRANCH_OVERRIDE`
+  — same image-tag resolution as the amd64 pipelines; leave unset to
+  auto-detect the latest intermediate tag off `cp-server-connect:latest`.
+- `KDP_REPO_OVERRIDE` / `KDP_BRANCH_OVERRIDE` — set `KDP_BRANCH_OVERRIDE` to
+  the personal `s390x-base`-derived branch you pushed at the end of section
+  3 (and `KDP_REPO_OVERRIDE` if it's on a fork), instead of leaving it on
+  `confluentinc/kafka-docker-playground@master`, to validate your fixes
+  before they're merged there.
+
+**Credentials are handled for you.** The pipeline pulls
+`connect/system-tests/CP_CONNECTOR_TEST_CREDS` from Vault and does an AWS STS
+assume-role for scoped creds — the same credential source the existing
+amd64 `cp-connector-tests` pipeline already uses for the full connector
+list. If a connector's test already runs against that Vault secret on
+amd64, you don't need to gather or forward any credentials yourself for the
+s390x run either. This only breaks down for a connector whose credentials
+live outside that Vault path — check with the team if you're not sure,
+rather than assuming.
+
+**Triggering via Claude Code:** the `/certify-s390x` skill can trigger this
+task directly through the Semaphore MCP tools and poll it to completion,
+the same pattern `kdp-cp-validation-onboard-test` uses for the generic
+multi-arch task — see that skill's `SKILL.md` step 3a for the exact calls.
+It shares that task's Semaphore project (`connect-ci-cd-pipelines`,
+`project_id` `8b75ea88-cb41-42ae-a69e-c8237dcbb0d5`, org `semaphore`
+`6ab08ce0-d948-4a80-b8e7-748bbb9cdf64`), but `run-cp-connector-selected-tests-s390x`
+is a different task with its own `task_id`, which is a placeholder pending
+PR #223 merging — resolve it via
+`mcp__chewie__semaphore_list_workflows(project_name="connect-ci-cd-pipelines", branch_name="master")`
+once it exists, and fill it in both there and here. Until then, trigger
+manually from the Semaphore UI as described above.
+
+The pipeline runs on the `s1-ubuntu-24-s390x-4` agent pool, handles its own
+QEMU bootstrap (the same Debian 12 bookworm `qemu-user-static` 7.2 build and
+anti-`tonistiigi/binfmt` reasoning as `setup-vm.sh` — good cross-confirmation
+that approach is right), installs `docker buildx` manually (not preinstalled
+on this agent image — if you ever see `docker: 'buildx' is not a docker
+command` on the VM fallback too, the same GitHub-release install works),
+runs the test via `playground run`, and publishes a JUnit report plus
+connect-container logs and `playground container display-error-all-containers`
+output as Semaphore artifacts per test. A `playground run` exit code of 107
+is treated as `known_issue` and 111 as `skipped` — both are non-failing
+outcomes, not silent passes, so don't read a green pipeline as "every test
+actually ran clean" without checking which status each one got.
+
+`num_jobs` currently defaults to `"1"` — conservative, left over from the
+old single-capacity validation pool (DP-19305) and not yet reconfirmed
+against the new 10-agent GA pool (DP-19829). Don't assume you can fan out
+many connectors in parallel yet; check with the team first if you want to
+push on that.
+
+One thing this pipeline does that isn't yet ported to `s390x-base`: it
+comments out `KAFKA_METRIC_REPORTERS` in both
+`environment/plaintext/docker-compose.yml` and `docker-compose-kraft.yml`
+before running. Unlike the Schema Registry race fix in section 6, the root
+cause here isn't confirmed — just observed as necessary in this pipeline.
+If you hit a `KAFKA_METRIC_REPORTERS`-related startup failure on the VM
+fallback that doesn't match anything else in the diagnostic table, try the
+same comment-out before spending time elsewhere, and flag it to the team as
+a possible `s390x-base` gap.
+
+## 5. Fallback: the shared VM path
+
+Use this when: a connector's test isn't registered in `tests.txt` yet; you're
+doing fast, interactive Group 3b iteration; or the Semaphore pipeline is
+unavailable/at capacity.
+
+### 5.1 Get a VM and set it up (once per VM)
 
 - The 3 shared s390x VMs are coordinated ad hoc — check with the team before
   starting so you're not colliding with another SME's run.
 - The VMs have **no git access**. Copy the repo over manually (`scp`/`rsync`
-  your local `s390x` branch checkout), and copy any script changes back to
-  your local clone before committing — nothing you edit only on the VM is
-  safe until it's synced back. (`certify-connector.sh --host` does this sync
-  for you when actually running a test — see section 4 — but you still need
-  the one-time bootstrap below done on the VM first, and you're still
-  responsible for syncing any edits back before they're lost.)
+  your local `s390x-base`-derived branch checkout), and copy any script
+  changes back to your local clone before committing — nothing you edit
+  only on the VM is safe until it's synced back. (`certify-connector.sh
+  --host` does this sync for you when actually running a test — see 5.4 —
+  but you still need the one-time bootstrap below done on the VM first, and
+  you're still responsible for syncing any edits back before they're lost.)
 - **Check what container runtime is already there before installing anything.**
   Don't assume Podman just because an earlier design doc assumed RHEL 10 —
   one of the actual shared VMs turned out to be Ubuntu with no runtime at
@@ -66,7 +269,7 @@ other connector continues on the 3 shared s390x VMs described below.
   this CPU generation), registers it with binfmt_misc, and — only if Podman
   is what's actually there — sets its short-name resolution to permissive.
 
-### SSH access prerequisites (required before using `--host`)
+### 5.2 SSH access prerequisites (required before using `--host`)
 
 The VMs are accessed by private key, not password. `certify-connector.sh
 --host` requires **non-interactive** key-based auth to already be working —
@@ -111,7 +314,7 @@ driving this through the skill. Set this up once per VM, before your first
    alias is what carries the `IdentityFile`, so the script (and the skill)
    don't need any separate way to know which key to use.
 
-### Connector service credentials (Cloud/SaaS connectors, e.g. S3, GCS)
+### 5.3 Connector service credentials (Cloud/SaaS connectors, e.g. S3, GCS)
 
 Some connectors need real service credentials to run at all — check the
 connector's own `README.md` (e.g. `connect-aws-s3-sink` needs
@@ -143,14 +346,13 @@ environment for as long as your test is executing. Two things reduce the
 real risk:
 
 - **Prefer short-lived, scoped credentials** (an assumed-role session token,
-  like the real CI pipeline already uses) **over a long-lived IAM key** —
+  like the Semaphore pipeline already uses) **over a long-lived IAM key** —
   if it's seen, it expires soon and can't do much.
 - Treat any credential used this way as burned after the run if it's a
-  long-lived key you can't easily rotate — this workflow is a stopgap until
-  the Semaphore path (see the top of this doc) is validated for credentialed
-  connectors and takes over, which removes the shared-VM exposure entirely.
-  Vault access being live is necessary for that but not sufficient by
-  itself — the pipeline still needs to prove it end-to-end first.
+  long-lived key you can't easily rotate — this is exactly the exposure the
+  default Semaphore path (section 4) removes, since it pulls scoped creds
+  from Vault centrally instead of forwarding a personal key through a
+  shared login. Prefer section 4 whenever the test is already registered.
 
 **Watch for `$USER`-derived resource names.** Several connector scripts
 (e.g. `connect-aws-s3-sink/s3-sink.sh` defaults to `pg-bucket-${USER}`)
@@ -162,120 +364,23 @@ resource. Check whether the script actually honors a pre-set override
 connector) before assuming `export AWS_BUCKET_NAME=... --forward-env
 AWS_BUCKET_NAME` will help.
 
-## 2. Branch strategy
-
-- All the common framework fixes (CP image defaults, `:z` SELinux labels,
-  the auto-create-topics/Schema Registry race fix, the kcat s390x fallback,
-  etc.) live on `s390x-base`. Branch your connector-specific work off
-  **that**, not `master` — `s390x-base` has no dependency on the
-  certification tooling below, so it's the right branch point even if
-  you're not using the skill/script.
-- This certification tooling (`certify-connector.sh`, `setup-vm.sh`,
-  `connector-groups.txt`, this doc, the Claude Code skill) lives on
-  `s390x-cert-tooling`, branched from `s390x-base`. It's a convenience layer
-  for running the checklist, not something a connector branch needs to
-  contain — merge or rebase it in locally if you want the script/skill
-  available, but don't build your connector-specific branch on top of it.
-- Make your connector-specific changes on a personal branch off
-  `s390x-base`, get the test passing, then PR back to `s390x-base`.
-- Purely s390x-specific workarounds (QEMU flags, platform pins) stay on
-  `s390x-base` permanently. Anything with general backwards-compatible value
-  (e.g. a genuine bug fix) gets cherry-picked to `master` separately — flag
-  it in your PR description if you think something qualifies.
-- Note: `podman-compose`'s lack of `--quiet` support on `build` is a known
-  issue (see Lineage 1 history) but is **not yet fixed on `s390x-base`** —
-  the fix was skipped because the file snapshot `s390x-base` forked from
-  didn't have `--quiet` on that line at all, so applying the old patch
-  would have silently changed unrelated behavior. If you hit
-  `unknown flag: --quiet` on a podman-compose host, that's why — re-add the
-  probe-based guard properly against current file content before relying
-  on it.
-
-## 3. Find your connector's group
-
-Check `scripts/s390x/connector-groups.txt` first — it's a simple local
-reference classifying the 85 in-scope connectors (not a CI artifact; see the
-file's header). If yours isn't listed, check `s390x-image-analysis.md`
-directly for the full rationale.
-
-| Group | What it means | Your effort |
-|---|---|---|
-| Cloud/SaaS | Calls a real cloud API, no local service container | Lowest — usually just run it |
-| Group 1/2 (ready / minor fix) | Service image already has an s390x manifest, or needs a version bump | Low — check `s390x-image-analysis.md` for the target image tag |
-| Group 4 (QEMU viable) | No native s390x image, but QEMU emulation works for functional testing | Medium — expect 2-5x slower runs, some debugging |
-| Group 3b (QEMU high-risk, e.g. Oracle XE, SAP HANA) | JIT-heavy service, QEMU likely unstable | High, uncertain outcome — best-effort only, don't sink days into it |
-| Group 3 (licensed, no public image) | Needs out-of-band image provisioning | Manual — talk to the team before starting, this isn't a script problem |
-
-## 4. Run the certification checklist
-
-Use the script directly, or drive it through the `/certify-s390x` Claude
-Code skill — but they apply fixes differently, and it matters which one
-you're using:
-
-- **Script's `--apply-fixes`**: mechanical, fixed regex/YAML patterns. Fast
-  and fine for the common cases, but its coverage is exactly as wide as
-  those patterns — a multi-stage Dockerfile, an image behind a build `ARG`,
-  an unusual volume line can slip past it silently.
-- **The Claude Code skill**: runs the script *without* `--apply-fixes` for
-  the audit, then reads the flagged files itself and applies fixes with
-  full context, catching things the fixed patterns don't anticipate. If
-  you're working through Claude Code, prefer this over telling it to just
-  run `--apply-fixes`.
-
-Either way, **don't do a plain audit first and only fix things after they
-fail on the VM** — that burns a VM cycle on something already knowable
-ahead of time. Fix proactively, before running.
-
-Using the script's own `--apply-fixes` directly:
+### 5.4 Running the test
 
 ```
-# 1. Audit AND fix in one pass (local repo edit, no VM needed yet):
-bash scripts/s390x/certify-connector.sh <connector-dir> --apply-fixes
-
-# 2. Actually run the test — from your laptop, targeting the VM over SSH:
-bash scripts/s390x/certify-connector.sh <connector-dir> --run --host sme@<s390x-vm-hostname>
-
-# ...or, if you're already SSH'd into the VM yourself, just:
-bash scripts/s390x/certify-connector.sh <connector-dir> --run --apply-fixes
+bash scripts/s390x/certify-connector.sh <connector-dir> --run --host <alias>
 ```
 
-**Where you run this matters.** QEMU only exists on the VM, so running step
-2 anywhere else gives a meaningless result — the script refuses to actually
+**Where you run this matters.** QEMU only exists on the VM, so running this
+anywhere else gives a meaningless result — the script refuses to actually
 run the test on a non-s390x host without `--host`, so a laptop run can't
-silently produce a false pass/fail. Step 1 (audit + fix) is fine to run
-locally either way, since it's pure repo editing.
+silently produce a false pass/fail.
 
-Always review the diff (`git diff`) before committing — applying
-automatically isn't the same as applying unreviewed. Re-running
-`--apply-fixes` is safe: already-fixed lines report "OK", not "FIX NEEDED"
-again.
+## 6. Diagnose failures
 
-What it fixes automatically (Section 3 of the design doc, condensed):
-
-- **Any image with no s390x manifest** — Dockerfile `FROM` lines in a custom
-  build *and* `image:` fields directly in `docker-compose*.yml` (most
-  connectors don't build their own image at all, so this second case is the
-  one that matters most often): adds `--platform=linux/amd64` /
-  `platform: linux/amd64`.
-- **HTTPS-fetching Dockerfile `RUN` steps** (`npm install`, `pip install`,
-  `apt-get install`, `curl https://...`, etc.): prefixes
-  `OPENSSL_ia32cap=0x0`, or QEMU's AES-NI emulation breaks TLS.
-- **EOL base images** (`node:14`, `python:3.8`, `openjdk:11`): bumped to
-  `node:20`, `python:3.12`, `eclipse-temurin:17` — they carry more QEMU
-  compatibility gaps.
-- **SELinux `:z` on host-path volume mounts**: added to any docker-compose
-  entry mounting a host path (`./...` or `../...`), on RHEL 10 with SELinux
-  enforcing.
-
-Things it does **not** check, that you should sanity-check yourself for
-Group 4 connectors: whether the service is JIT-heavy enough that QEMU is a
-bad fit in the first place (Section 4.3's QEMU-vs-external-service
-tradeoff).
-
-## 5. Diagnose failures
-
-The script matches your test's failure output against this table
-automatically; here it is for quick reference:
+For a Semaphore run, start from the JUnit report and the
+`playground_display_error_all_containers_output.txt` / connect-container-log
+artifacts the pipeline publishes per test. For a VM fallback run, the script
+matches the captured log against this table automatically:
 
 | Error | Cause | Fix |
 |---|---|---|
@@ -288,20 +393,30 @@ automatically; here it is for quick reference:
 | `Bad PSW` from the QEMU binary | Wrong QEMU binary (`tonistiigi/binfmt`) | Re-run `setup-vm.sh` for the Debian bookworm build |
 | Schema Registry crash-loops on a fresh environment | **Confirmed via a clean A/B re-test on a real s390x VM** (same VM, same connector, with the fix present vs absent): removing the auto-create gate reliably makes the test fail, restoring it reliably makes it pass. Root cause: Kafka auto-creates `_schemas` with the default `delete` cleanup policy, racing Schema Registry's own explicit `compact`-policy create call on startup. The *exact* trigger for why this race goes the wrong way on s390x (a working theory is Podman's CNI+dnsname DNS stack being slower than Docker's native bridge+DNS) is still not independently confirmed — what's confirmed is that the fix is necessary, not just plausible. | Handled automatically: `KAFKA_AUTO_CREATE_TOPICS_ENABLE` defaults to `false` on s390x for the startup window (`scripts/utils.sh`), then `re_enable_auto_create_topics` (`scripts/cli/src/lib/utils_function.sh`, called from `environment/plaintext/start.sh`) turns it back on once Schema Registry is confirmed up. No per-connector fix needed. |
 | Disk full from an old, still-running process | An orphaned container/JVM process from a previous SME's session was never cleaned up | `pkill` does not take a PID (only a process name) — use `kill <pid>` to actually stop it, then check for other stale processes before assuming the disk itself is the problem |
+| Broker fails to start / crashes early in a fresh environment, no other row matches | **Not fully confirmed** — observed as a necessary workaround in the Semaphore s390x pipeline ([PR #223](https://github.com/confluentinc/connect-ci-cd-pipelines/pull/223)); root cause not root-caused the way the Schema Registry race above is | Comment out `KAFKA_METRIC_REPORTERS: $KAFKA_METRIC_REPORTERS` in `environment/plaintext/docker-compose.yml` and `docker-compose-kraft.yml`; not yet ported to `s390x-base` — flag to the team if this fixes your run |
 | `no image found in manifest list for architecture s390x` for `confluentinc/cp-kcat`, in a **ccloud-environment** test | `cp-kcat` has no s390x manifest | Handled automatically in `scripts/cli/src/commands/topic/get-number-records.sh`: on s390x, falls back to the connect image (which ships kcat) instead of `cp-kcat`. Only covers that one ad-hoc kcat container — the standing `kcat` service in `environment/plaintext/docker-compose.yml` is handled separately via the `platform: linux/amd64` QEMU pin above. Note: the plaintext-environment path most certification runs use never touches kcat at all (it execs into the broker container directly), so this fix is currently only relevant if you're running ccloud-mode tests on s390x. |
 
 If nothing matches, read the actual log before guessing — don't apply
 speculative fixes to a failure you haven't read.
 
-## 6. Wrap up
+## 7. Wrap up
 
-- Open your KDP PR against `s390x` (not `master`) with the Dockerfile/
-  docker-compose fixes.
-- Separately, register (or confirm) the connector's test in
-  `connect-ci-cd-pipelines`'s `cp-connector-tests/tests.txt` with your email
-  as owner — that's the real, shared test list CI reads from, and how
-  ownership is tracked. That's a different repo/PR from this one.
-- Once both land, it's part of the certified set — no separate sign-off step.
+Certification means the connector runs successfully on s390x (via Semaphore
+if registered, via the VM fallback if not) — that's the bar, not a separate
+sign-off step.
+
+- Open your KDP PR against `s390x-base` (not `master`, and not
+  `s390x-cert-tooling`) with the Dockerfile/docker-compose fixes, to enable
+  future automated runs. Link the green Semaphore run (or, if you went the
+  VM fallback route for a Group 3b connector, say so explicitly) as evidence.
+- If the connector's group was missing or wrong in `connector-groups.txt`,
+  update it as part of this PR and flag the Confluence Appendix A entry for
+  a follow-up correction — otherwise the next SME re-does your
+  classification work from scratch.
+- Registering the test in `connect-ci-cd-pipelines`'s `tests.txt` (so future
+  runs default to Semaphore instead of the VM) is a separate, optional
+  follow-up — see the `kdp-cp-validation-onboard-test` skill — not required
+  to call this connector certified.
 
 ## Getting unstuck
 
@@ -310,4 +425,7 @@ speculative fixes to a failure you haven't read.
 - Genuinely new failure mode not in the table above, or a QEMU reliability
   call for a Group 3b/4 connector: post the log and ask before spending a
   full day on it — QEMU debugging time is explicitly capped as
-  "best-effort" in the design doc for the riskiest services.
+  "best-effort" for the riskiest services. If QEMU itself is the blocker,
+  "Manual Testing: Connector Certification Guide — s390x" on Confluence
+  covers standing up the target service on a real amd64 host and pointing
+  the connector at it externally instead.

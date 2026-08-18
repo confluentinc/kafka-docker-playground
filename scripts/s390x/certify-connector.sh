@@ -208,7 +208,7 @@ then
         esac
     else
         logwarn "connect-${CONNECTOR_DIR#connect-} not found in scripts/s390x/connector-groups.txt"
-        logwarn "treat as an ungrouped/new connector — classify it manually against s390x-image-analysis.md before proceeding"
+        logwarn "check Appendix A of the SME certification guide on Confluence before proceeding; if it's missing there too, ask the team rather than guessing a group"
     fi
 else
     logwarn "scripts/s390x/connector-groups.txt not found, skipping group lookup"
@@ -565,7 +565,7 @@ if [ "$MATCHED" -eq 0 ]
 then
     logwarn "no known pattern matched — this isn't one of the deterministic Section 5.5 failures."
     logwarn "inspect the log manually: ${LOG_FILE}"
-    logwarn "if this looks like a QEMU reliability issue (Group 3a/3b service), see the QEMU-vs-external-service tradeoff in the design doc before spending more time debugging emulation."
+    logwarn "if this looks like a QEMU reliability issue (Group 3a/3b service), see 'Manual Testing: Connector Certification Guide - s390x' on Confluence for the external-service fallback before spending more time debugging emulation."
 fi
 
 exit "$TEST_STATUS"
