@@ -104,8 +104,14 @@ EOF
 
 sleep 10
 
+# s390x polls/reads GCS more slowly (connector is native s390x but the arch is
+# 2-5x slower per the certification guide); give the source connector more time
+# to deliver before the consume verify gives up. No behaviour change on amd64.
+CONSUME_TIMEOUT=60
+if [ "$(uname -m)" = "s390x" ]; then CONSUME_TIMEOUT=180; fi
+
 log "Verify messages are in topic quick-start-topic"
-playground topic consume --topic quick-start-topic --min-expected-messages 9 --timeout 60
+playground topic consume --topic quick-start-topic --min-expected-messages 9 --timeout $CONSUME_TIMEOUT
 
 # null    {"f1":"value1"}
 # null    {"f1":"value2"}
