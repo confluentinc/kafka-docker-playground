@@ -15,6 +15,26 @@ source ${DIR}/../../scripts/utils.sh
 PLAYGROUND_ENVIRONMENT=${PLAYGROUND_ENVIRONMENT:-"plaintext"}
 playground start-environment --environment "${PLAYGROUND_ENVIRONMENT}" --docker-compose-override-file "${PWD}/docker-compose.plaintext.oauth2.yml"
 
+# s390x: httpserver (vdesabou/http-sink-demo) is an amd64 Spring Boot app running
+# emulated under QEMU, so it is much slower to start and bind :8080. The connector's
+# create-time URL validation does a live HTTP connect and fails with "Invalid URL"
+# (java.net.ConnectException: Connection refused) if it runs before the app is up.
+# Wait for httpserver to accept connections first. No behaviour change on amd64.
+if [ "$(uname -m)" = "s390x" ]
+then
+    log "⏳ s390x: waiting for emulated httpserver to bind :8080 before creating the connector"
+    for i in $(seq 1 60)
+    do
+        code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://localhost:18080/api/messages || true)
+        if [ "$code" != "000" ]
+        then
+            log "✅ httpserver responding (HTTP $code) after ~$((i*5))s"
+            break
+        fi
+        sleep 5
+    done
+fi
+
 log "Creating http-source connector"
 
 playground connector create-or-update --connector http-source  << EOF
