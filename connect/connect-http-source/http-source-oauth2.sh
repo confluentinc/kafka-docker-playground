@@ -77,5 +77,11 @@ curl -X PUT \
 
 sleep 2
 
+# s390x: the HTTP source connector polls on request.interval.ms and its
+# poll->oauth->produce cycle is slower on the loaded s390x agent, so 60s isn't
+# always enough for the first record to land. Give the verify more poll cycles.
+VERIFY_TIMEOUT=60
+if [ "$(uname -m)" = "s390x" ]; then VERIFY_TIMEOUT=180; fi
+
 log "Verify we have received the data in http-topic-messages topic"
-playground topic consume --topic http-topic-messages --min-expected-messages 1 --timeout 60
+playground topic consume --topic http-topic-messages --min-expected-messages 1 --timeout $VERIFY_TIMEOUT
