@@ -2,7 +2,7 @@
 services:
   connect:
     volumes:
-      - ../../connect/connect-azure-blob-storage-source/data:/data
+      - ../../connect/connect-azure-blob-storage-source/data:/data:z
     environment:
       CONNECT_PLUGIN_PATH: /usr/share/confluent-hub-components/confluentinc-kafka-connect-azure-blob-storage-source,/usr/share/confluent-hub-components/confluentinc-kafka-connect-azure-blob-storage
       # https://support.confluent.io/hc/en-us/articles/16480297311124-How-to-bypass-Azure-Blob-Storage-sink-connector-failing-with-InaccessibleObjectException
