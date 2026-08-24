@@ -81,8 +81,8 @@ back the workflow URL for them to link as evidence when they open it.
 
 ## Manual-mode fallback
 
-If `mcp__semaphore__tasks_run` failed, or the task/IDs in SKILL.md step 3a
-are still unresolved (task not yet merged — see the precondition there),
-there's no `workflow_id` to poll. Tell the user to trigger and watch the run
-manually from the Semaphore UI instead — this file's automation doesn't
+If `mcp__semaphore__tasks_run` failed, wasn't connected in this session, or
+the IDs in SKILL.md step 3a turn out to be wrong/stale, there's no
+`workflow_id` to poll. Tell the user to trigger and watch the run manually
+from the Semaphore UI instead — this file's automation doesn't
 apply until that's resolved.

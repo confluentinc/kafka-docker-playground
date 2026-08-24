@@ -1,31 +1,23 @@
-# Certifying a connector on s390x — SME one-pager
+# Certifying a connector on s390x — tooling companion
 
-Status as of 2026-08-14. Source docs (fuller detail, read if something here
-is unclear): *s390x Connector Certification — Current Status and Path
-Forward* and *Automated Testing: Connector Certification on s390x
-architecture*.
+**For the guided walkthrough, start with the [s390x KDP Testing -
+Certification guide for SMEs](https://confluentinc.atlassian.net/wiki/spaces/~62ee260c3cc20c06c8afd0ff/pages/6042779888/s390x+KDP+Testing+-+Certification+guide+for+SMEs)
+on Confluence** — background, scope, infrastructure choices (Semaphore
+default vs. shared-VM fallback), and the step-by-step procedure live there
+and are kept current, including [Appendix A's per-connector group
+list](https://confluentinc.atlassian.net/wiki/spaces/~62ee260c3cc20c06c8afd0ff/pages/6042779888/s390x+KDP+Testing+-+Certification+guide+for+SMEs#Appendix-A:-Connector-groups).
 
-**Default path: the Semaphore pipeline.** `run-cp-connector-selected-tests-s390x`
-(added via [PR #223](https://github.com/confluentinc/connect-ci-cd-pipelines/pull/223)
-to `connect-ci-cd-pipelines`) runs on the real `s1-ubuntu-24-s390x-4` agent
-pool (capacity from DP-19829) with proper Vault access (DP-19746) already
-wired in — no shared VM, no manual credential juggling, no `--host`/
-`--forward-env`. For any connector whose test is already registered in
-`cp-connector-tests/tests.txt`, this is the certification path: see section 4.
+This doc is the **repo-specific companion** the `/certify-s390x` skill and
+`certify-connector.sh` actually run on: exact script/file paths, VM setup
+detail Confluence only summarizes, the full diagnostic table, and the
+Semaphore IDs the skill triggers against. Section numbers below are
+load-bearing — `SKILL.md` points at several of them directly — so don't
+reorder sections without updating it.
 
-The 3 shared s390x VMs (section 5) are now the **fallback**, for cases the
-pipeline can't cover on its own:
-- A connector's test isn't registered in `tests.txt` yet.
-- Group 3b (QEMU high-risk) connectors where you want fast, interactive
-  iteration rather than a full pipeline round-trip per attempt.
-- The pipeline itself is down, at capacity, or flaky.
-
-**Registering a test in `tests.txt` is a separate, out-of-scope effort from
-certification itself** — this doc and the `/certify-s390x` skill get a
-connector running successfully on s390x (via the VM if unregistered, via
-Semaphore if registered); they don't onboard it into the shared CI test
-list. If you also want that done, that's the `kdp-cp-validation-onboard-test`
-Claude Code skill, a separate task from what's below.
+One thing worth restating because it's easy to miss: **registering a test
+in `tests.txt` is a separate, out-of-scope effort from certification
+itself** (same as the Confluence guide states) — see the
+`kdp-cp-validation-onboard-test` skill if that's also wanted.
 
 ## 1. Find your connector's group
 
@@ -48,53 +40,36 @@ re-ask.
 
 ## 2. Branch strategy
 
-- All the common framework fixes (CP image defaults, `:z` SELinux labels,
-  the auto-create-topics/Schema Registry race fix, the kcat s390x fallback,
-  etc.) live on `s390x-base`. Branch your connector-specific work off
-  **that**, not `master` — `s390x-base` has no dependency on the
-  certification tooling below, so it's the right branch point even if
-  you're not using the skill/script.
+Confluence covers the general rule (branch off `s390x-base`, which carries
+the common framework fixes — CP image defaults, `:z` SELinux labels, the
+Schema Registry race fix, the kcat fallback — and PR back there, not
+`master`). Two things worth keeping here because they're specific to this
+repo's tooling layout, not general SME guidance:
+
 - This certification tooling (`certify-connector.sh`, `setup-vm.sh`,
   `connector-groups.txt`, this doc, the Claude Code skill) lives on
-  `s390x-cert-tooling`, branched from `s390x-base`. It's a convenience layer
-  for running the checklist, not something a connector branch needs to
-  contain — merge or rebase it in locally if you want the script/skill
-  available, but don't build your connector-specific branch on top of it.
-- Make your connector-specific changes on a personal branch off
-  `s390x-base`, get the test passing, then PR back to `s390x-base`.
-- Purely s390x-specific workarounds (QEMU flags, platform pins) stay on
-  `s390x-base` permanently. Anything with general backwards-compatible value
-  (e.g. a genuine bug fix) gets cherry-picked to `master` separately — flag
-  it in your PR description if you think something qualifies.
-- Note: `podman-compose`'s lack of `--quiet` support on `build` is a known
-  issue (see Lineage 1 history) but is **not yet fixed on `s390x-base`** —
-  the fix was skipped because the file snapshot `s390x-base` forked from
-  didn't have `--quiet` on that line at all, so applying the old patch
-  would have silently changed unrelated behavior. If you hit
-  `unknown flag: --quiet` on a podman-compose host, that's why — re-add the
-  probe-based guard properly against current file content before relying
-  on it.
+  `s390x-cert-tooling`, branched from `s390x-base` — a convenience layer for
+  running the checklist, not something a connector branch needs to contain.
+  Merge or rebase it in locally if you want the script/skill available, but
+  don't build your connector-specific branch on top of it.
+- `podman-compose`'s lack of `--quiet` support on `build` is a known issue
+  but **not yet fixed on `s390x-base`** — the fix was skipped because the
+  file snapshot `s390x-base` forked from didn't have `--quiet` on that line
+  at all, so applying the old patch would have silently changed unrelated
+  behavior. If you hit `unknown flag: --quiet` on a podman-compose host,
+  that's why — re-add the probe-based guard properly against current file
+  content before relying on it.
 
 ## 3. Audit and fix known issues (before running, either path)
 
-Use the script directly, or drive it through the `/certify-s390x` Claude
-Code skill — but they apply fixes differently, and it matters which one
-you're using:
-
-- **Script's `--apply-fixes`**: mechanical, fixed regex/YAML patterns. Fast
-  and fine for the common cases, but its coverage is exactly as wide as
-  those patterns — a multi-stage Dockerfile, an image behind a build `ARG`,
-  an unusual volume line can slip past it silently.
-- **The Claude Code skill**: runs the script *without* `--apply-fixes` for
-  the audit, then reads the flagged files itself and applies fixes with
-  full context, catching things the fixed patterns don't anticipate. If
-  you're working through Claude Code, prefer this over telling it to just
-  run `--apply-fixes`.
-
-Either way, **don't do a plain audit first and only fix things after they
-fail** — that burns a Semaphore pipeline slot or a shared VM cycle on
-something already knowable ahead of time. Fix proactively, before running
-either path.
+Run the script directly for a mechanical fix pass, or drive it through the
+`/certify-s390x` skill for a fuller audit-then-hand-edit pass — `SKILL.md`
+explains why the skill doesn't just call `--apply-fixes` itself (coverage
+is only as wide as its fixed regex/YAML patterns; a multi-stage Dockerfile,
+an image behind a build `ARG`, or an unusual volume line can slip past it).
+Either way, fix proactively before running either path — don't burn a
+Semaphore slot or VM cycle finding out about something already knowable
+ahead of time.
 
 Using the script's own `--apply-fixes` directly (pure local repo editing,
 no VM or pipeline needed yet):
@@ -173,18 +148,18 @@ s390x run either. This only breaks down for a connector whose credentials
 live outside that Vault path — check with the team if you're not sure,
 rather than assuming.
 
-**Triggering via Claude Code:** the `/certify-s390x` skill can trigger this
-task directly through the Semaphore MCP tools and poll it to completion,
+**Triggering via Claude Code:** the `/certify-s390x` skill triggers this
+task directly through the Semaphore MCP tools and polls it to completion —
 the same pattern `kdp-cp-validation-onboard-test` uses for the generic
-multi-arch task — see that skill's `SKILL.md` step 3a for the exact calls.
-It shares that task's Semaphore project (`connect-ci-cd-pipelines`,
-`project_id` `8b75ea88-cb41-42ae-a69e-c8237dcbb0d5`, org `semaphore`
-`6ab08ce0-d948-4a80-b8e7-748bbb9cdf64`), but `run-cp-connector-selected-tests-s390x`
-is a different task with its own `task_id`, which is a placeholder pending
-PR #223 merging — resolve it via
-`mcp__chewie__semaphore_list_workflows(project_name="connect-ci-cd-pipelines", branch_name="master")`
-once it exists, and fill it in both there and here. Until then, trigger
-manually from the Semaphore UI as described above.
+multi-arch task — see this skill's own `SKILL.md` step 3a for the exact
+calls. It shares that other task's Semaphore project
+(`connect-ci-cd-pipelines`, `project_id` `8b75ea88-cb41-42ae-a69e-c8237dcbb0d5`,
+org `semaphore` `6ab08ce0-d948-4a80-b8e7-748bbb9cdf64`), and
+`run-cp-connector-selected-tests-s390x` itself now has a confirmed
+`task_id`: `712884d6-1a50-4dcc-a591-1b5e20af2997` (PR #223 merged
+2026-08-18). If `mcp__semaphore__tasks_run` isn't connected in your
+session, or these IDs ever turn out stale, trigger manually from the
+Semaphore UI as described above instead.
 
 The pipeline runs on the `s1-ubuntu-24-s390x-4` agent pool, handles its own
 QEMU bootstrap (the same Debian 12 bookworm `qemu-user-static` 7.2 build and
@@ -400,10 +375,6 @@ If nothing matches, read the actual log before guessing — don't apply
 speculative fixes to a failure you haven't read.
 
 ## 7. Wrap up
-
-Certification means the connector runs successfully on s390x (via Semaphore
-if registered, via the VM fallback if not) — that's the bar, not a separate
-sign-off step.
 
 - Open your KDP PR against `s390x-base` (not `master`, and not
   `s390x-cert-tooling`) with the Dockerfile/docker-compose fixes, to enable

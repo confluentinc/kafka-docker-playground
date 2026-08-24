@@ -5,14 +5,16 @@ description: Walk an SME through certifying one KDP connector on s390x — group
 
 # Certifying a connector on s390x
 
-This skill automates the deterministic parts of the per-connector certification
-checklist from "Automated Testing: Connector Certification on s390x
-architecture" (Section 5.4/5.5). `scripts/s390x/certify-connector.sh` handles
-the parts that are pure procedure with no judgment involved — group lookup,
-Dockerfile/compose audit, image-manifest verification, running the test (over
-SSH, for the VM fallback), diagnosing a failure against the known error
-table. See `connect/CERTIFYING_S390X.md` for the plain-prose version of this
-workflow.
+This skill automates the deterministic parts of the per-connector
+certification checklist described in the ["s390x KDP Testing - Certification
+guide for SMEs"](https://confluentinc.atlassian.net/wiki/spaces/~62ee260c3cc20c06c8afd0ff/pages/6042779888/s390x+KDP+Testing+-+Certification+guide+for+SMEs)
+on Confluence. `scripts/s390x/certify-connector.sh` handles the parts that
+are pure procedure with no judgment involved — group lookup, Dockerfile/
+compose audit, image-manifest verification, running the test (over SSH, for
+the VM fallback), diagnosing a failure against the known error table. See
+`connect/CERTIFYING_S390X.md` for the repo-specific tooling detail (exact
+paths, VM setup, diagnostic table, Semaphore IDs) that companion doc adds on
+top of the Confluence guide.
 
 **Default path is the Semaphore pipeline, not a shared VM.**
 `run-cp-connector-selected-tests-s390x` in `connect-ci-cd-pipelines` (added
@@ -160,42 +162,41 @@ Ask the user (if not already given):
    `connect/system-tests/CP_CONNECTOR_TEST_CREDS` from Vault and assumes a
    scoped AWS role itself.
 
-   **Precondition — the task must actually exist in Semaphore.**
-   `run-cp-connector-selected-tests-s390x` ships via
+   **Precondition (resolved 2026-08-18): the task exists.**
    [PR #223](https://github.com/confluentinc/connect-ci-cd-pipelines/pull/223)
-   in `connect-ci-cd-pipelines`, which may still be unmerged. Check first:
-   ```
-   gh pr view 223 --repo confluentinc/connect-ci-cd-pipelines --json state,mergedAt
-   ```
-   If it's not merged, the task doesn't exist yet and nothing below will
-   resolve — fall back to triggering it by hand from the Semaphore UI
-   (`connect-ci-cd-pipelines` → Tasks → `run-cp-connector-selected-tests-s390x`
-   → Run, with the parameters from `CERTIFYING_S390X.md` section 4) and
-   watch it yourself; there's no `workflow_id` to hand to a monitoring loop
-   in that mode. Retry the MCP path once it's merged.
+   merged, and `run-cp-connector-selected-tests-s390x` is live at
+   `https://semaphore.ci.confluent.io/projects/connect-ci-cd-pipelines/schedulers/712884d6-1a50-4dcc-a591-1b5e20af2997/just_run`.
+   If a future check ever shows this task missing or renamed (re-verify with
+   `gh pr view 223 --repo confluentinc/connect-ci-cd-pipelines --json state,mergedAt`
+   if in doubt), fall back to triggering it by hand from that same Semaphore
+   UI page and watch it yourself — there's no `workflow_id` to hand to a
+   monitoring loop in that mode.
 
-   **IDs — two are known, one is a placeholder.** `run-cp-connector-selected-tests-s390x`
-   lives in the *same* Semaphore project as the generic multi-arch task the
-   onboarding skill triggers, so its `project_id`/`organization_id` are
-   already confirmed:
-   - **Project ID**: `8b75ea88-cb41-42ae-a69e-c8237dcbb0d5` (`connect-ci-cd-pipelines`)
+   **IDs — all three now known:**
+   - **Task ID**: `712884d6-1a50-4dcc-a591-1b5e20af2997`
+   - **Project ID**: `8b75ea88-cb41-42ae-a69e-c8237dcbb0d5` (`connect-ci-cd-pipelines`
+     — same project as the onboarding skill's generic task, confirmed via
+     `mcp__chewie__semaphore_list_workflows`)
    - **Organization ID**: `6ab08ce0-d948-4a80-b8e7-748bbb9cdf64` (org `semaphore`)
-   - **Task ID**: `<TBD — fill in once PR #223 merges>`. Resolve it with:
-     ```
-     mcp__chewie__semaphore_list_workflows(project_name="connect-ci-cd-pipelines", branch_name="master")
-     ```
-     and find the workflow whose task is `run-cp-connector-selected-tests-s390x`
-     — its `task_id` is in that record. Once you have a real value, replace
-     the placeholder here **and** in `CERTIFYING_S390X.md` section 4 so the
-     next SME doesn't re-derive it.
 
-   **Once the task exists and you have its ID:**
-   1. `mcp__semaphore__tasks_describe(mode="detailed")` first — confirm
-      `CP_CONNECT_TESTS_OVERRIDE`'s separator. `CERTIFYING_S390X.md` documents
-      it as pipe-separated based on the pipeline's current design, but that's
-      not independently confirmed the way the onboarding skill confirmed it
-      for the generic task (Section 4's docs could be stale by the time this
-      merges) — verify, don't assume.
+   Not yet independently verified: that this `task_id` is actually named
+   `run-cp-connector-selected-tests-s390x` (the tools that would confirm
+   that, `mcp__semaphore__tasks_describe`/`tasks_run`, weren't connected in
+   the session that recorded this ID — it came from a Semaphore UI link).
+   `tasks_describe` in step 1 below double-checks this on first live use;
+   if the task it describes doesn't match, stop and re-derive via
+   `mcp__chewie__semaphore_list_workflows(project_name="connect-ci-cd-pipelines", branch_name="master")`
+   instead of proceeding on a wrong ID.
+
+   **Now that you have its ID:**
+   1. `mcp__semaphore__tasks_describe(mode="detailed")` first — this both
+      confirms the `task_id` above actually resolves to
+      `run-cp-connector-selected-tests-s390x` (per the caveat above) and
+      confirms `CP_CONNECT_TESTS_OVERRIDE`'s separator.
+      `CERTIFYING_S390X.md` documents it as pipe-separated based on the
+      pipeline's design, but that's not independently confirmed the way the
+      onboarding skill confirmed it for the generic task — verify, don't
+      assume, the first time you actually use this.
    2. Build the override value: pipe-join the test name(s) confirmed in step 2
       above, e.g. `MysqlSourceTest`.
    3. **Confirm with the user before triggering** — a shared-state action,
@@ -334,11 +335,11 @@ Ask the user (if not already given):
 - It does not manage VM access or SSH credentials — if the user doesn't have
   an SSH target for a shared VM yet, that's a coordination step (see
   `connect/CERTIFYING_S390X.md` section 5.2), not something to work around.
-- It does not trigger the Semaphore pipeline via MCP until
-  `run-cp-connector-selected-tests-s390x` actually exists there (PR #223
-  merged) and its `task_id` placeholder in step 3a is filled in — until
-  then it falls back to telling the user which parameters to use manually
-  in the Semaphore UI, same as before this capability existed.
+- It does not trigger the Semaphore pipeline via MCP if
+  `mcp__semaphore__tasks_run` itself isn't connected in the current
+  session, or if the IDs in step 3a ever turn out to be wrong/stale — in
+  either case it falls back to telling the user which parameters to use
+  manually in the Semaphore UI, same as before this capability existed.
 - It does not register a connector's test in `cp-connector-tests/tests.txt`
   or open a PR against `connect-ci-cd-pipelines` — that's a separate,
   out-of-scope onboarding effort (see the `kdp-cp-validation-onboard-test`
