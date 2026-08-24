@@ -9724,7 +9724,19 @@ function get_connect_image() {
 }
 
 function az() {
-  docker run --quiet --rm -v /tmp:/tmp -v $HOME/.azure:/home/az/.azure -e HOME=/home/az --rm -i mcr.microsoft.com/azure-cli:azurelinux3.0 az "$@"
+  local az_cli_platform_flag=""
+  local az_cli_ssl_env_flag=""
+  if [ "$(uname -m)" = "s390x" ]
+  then
+    # mcr.microsoft.com/azure-cli has no s390x manifest, run it emulated via QEMU
+    az_cli_platform_flag="--platform linux/amd64"
+    # QEMU's AES-NI emulation produces invalid TLS records ("record layer
+    # failure") on HTTPS requests; disabling OpenSSL's CPU-feature
+    # detection forces a software fallback that avoids the bug (see
+    # connect/CERTIFYING_S390X.md diagnostic table)
+    az_cli_ssl_env_flag="-e OPENSSL_ia32cap=0x0"
+  fi
+  docker run --quiet --rm $az_cli_platform_flag $az_cli_ssl_env_flag -v /tmp:/tmp -v $HOME/.azure:/home/az/.azure -e HOME=/home/az --rm -i mcr.microsoft.com/azure-cli:azurelinux3.0 az "$@"
 }
 
 function display_docker_container_error_log() {
