@@ -49,7 +49,39 @@ wait_for_solace
 log "Solace UI is accessible at http://127.0.0.1:8080 (admin/admin)"
 
 log "Create the queue connector-quickstart in the default Message VPN using CLI"
-docker exec solace bash -c "/usr/sw/loads/currentload/bin/cli -A -s cliscripts/create_queue_cmd"
+# wait_for_solace only greps for "Running pre-startup checks", which is the
+# FIRST marker Solace emits -- it is not a readiness signal. Until SolOS has
+# finished starting, the CLI rejects the script with
+#     SolOS startup in progress, status: 'Starting daemon'
+#     Please try again later...
+# and exits 2, which set -e turns into an abort. Measured on a native broker
+# the gap between that marker and the CLI accepting config commands is ~5s, so
+# the fixed sleep in wait_for_solace covers it on amd64. On s390x the broker
+# boots roughly 15x slower under emulation and the same gap becomes ~80s, so
+# it does not. There is no later marker in the Solace log to wait on, so retry
+# until the CLI accepts the script -- which is exactly what Solace asks for.
+MAX_WAIT=300
+CUR_WAIT=0
+while true
+do
+     docker exec solace bash -c "/usr/sw/loads/currentload/bin/cli -A -s cliscripts/create_queue_cmd" > /tmp/solace-cli.log 2>&1
+     # Retry ONLY on the two "broker is still starting" signals. Note the exit
+     # code is useless here: the CLI returns 0 even when the commands inside a
+     # -s script fail. A clean run, or "already exists" from a previous
+     # iteration, both mean we are done -- matching on those would loop forever.
+     if ! grep -qiE "startup in progress|not AD-ACTIVE" /tmp/solace-cli.log
+     then
+          break
+     fi
+     if [[ "$CUR_WAIT" -gt "$MAX_WAIT" ]]; then
+          logerror "Solace message-spool was not ready after $MAX_WAIT seconds"
+          cat /tmp/solace-cli.log
+          exit 1
+     fi
+     sleep 5
+     CUR_WAIT=$(( CUR_WAIT+5 ))
+done
+cat /tmp/solace-cli.log
 
 log "Publish messages to the Solace queue using the REST endpoint"
 
