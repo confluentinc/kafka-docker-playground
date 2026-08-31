@@ -13,6 +13,15 @@ fi
 
 function wait_for_solace () {
      MAX_WAIT=240
+     if [ "$(uname -m)" = "s390x" ]
+     then
+          # solace/solace-pubsub-standard has no s390x manifest, so the broker
+          # runs emulated under QEMU (2-5x slower) on a 4 vCPU agent that is
+          # already running Kafka + Schema Registry + Connect; give it
+          # proportionally longer to reach its first startup milestone
+          # (see connect/CERTIFYING_S390X.md)
+          MAX_WAIT=900
+     fi
      CUR_WAIT=0
      log "⌛ Waiting up to $MAX_WAIT seconds for Solace to startup"
      docker container logs solace > /tmp/out.txt 2>&1
@@ -34,7 +43,11 @@ cd ../../connect/connect-solace-sink
 if [ ! -f ${DIR}/sol-jms-10.6.4.jar ]
 then
      log "Downloading sol-jms-10.6.4.jar"
-     wget -q https://repo1.maven.org/maven2/com/solacesystems/sol-jms/10.6.4/sol-jms-10.6.4.jar
+     # curl, not wget: the s390x Semaphore agent image ships curl but not
+     # wget, so wget fails here with "wget: command not found". curl is
+     # present on every agent (the pipeline prologue already uses it) and is
+     # the more common choice across the KDP connector scripts anyway.
+     curl --fail -sSL -O https://repo1.maven.org/maven2/com/solacesystems/sol-jms/10.6.4/sol-jms-10.6.4.jar
 fi
 cd -
 
