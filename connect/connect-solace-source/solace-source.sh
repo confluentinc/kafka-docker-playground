@@ -34,7 +34,11 @@ cd ../../connect/connect-solace-source
 if [ ! -f ${DIR}/sol-jms-10.6.4.jar ]
 then
      log "Downloading sol-jms-10.6.4.jar"
-     wget -q https://repo1.maven.org/maven2/com/solacesystems/sol-jms/10.6.4/sol-jms-10.6.4.jar
+     # curl, not wget: the s390x Semaphore agent image ships curl but not
+     # wget, so wget fails here with "wget: command not found". curl is
+     # present on every agent (the pipeline prologue already uses it) and is
+     # the more common choice across the KDP connector scripts anyway.
+     curl --fail -sSL -O https://repo1.maven.org/maven2/com/solacesystems/sol-jms/10.6.4/sol-jms-10.6.4.jar
 fi
 cd -
 
