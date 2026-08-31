@@ -280,19 +280,11 @@ function maybe_create_image()
       elif [ "$(uname -m)" = "s390x" ]
       then
         # Confluent has never published a CP image for s390x below 8.2, so
-        # the pre-8.1 tcpdump-RPM tiers that exist for arm64/x86_64 above
-        # can't apply here -- a running s390x image guarantees CP 8.2+, and
-        # that base image already carries tcpdump via its own repos (no
-        # separate arch-specific RPM download needed, unlike the older tiers).
-        #
-        # Use yum, not microdnf: the CP connect image is UBI9 *standard*,
-        # which ships yum/dnf. microdnf is the UBI-*minimal* package manager
-        # and is absent here, so it failed with "microdnf: command not found".
-        # No native s390x CP image exists yet, so this actually runs the amd64
-        # image under QEMU (same digest as the amd64 pipeline pulls) -- but
-        # keeping this arch-agnostic means it still holds once native s390x
-        # CP images land.
-        CONNECT_3RDPARTY_INSTALL="if [ ! -f /tmp/done ]; then yum -y install bind-utils openssl unzip findutils net-tools nc jq which iptables libmnl krb5-workstation krb5-libs vim && yum clean all && rm -rf /var/cache/yum && touch /tmp/done; fi"
+        # the pre-8.1 yum/tcpdump-RPM tiers that exist for arm64/x86_64 above
+        # can't apply here -- a running s390x image guarantees CP 8.2+ and
+        # microdnf, and that base image already carries tcpdump via its own
+        # repos (no separate RPM download needed, unlike the older tiers).
+        CONNECT_3RDPARTY_INSTALL="if [ ! -f /tmp/done ]; then microdnf -y install bind-utils openssl unzip findutils net-tools nc jq which iptables libmnl krb5-workstation krb5-libs vim && microdnf clean all && touch /tmp/done; fi"
       else
         if version_gt $TAG_BASE "7.9.9"
         then
