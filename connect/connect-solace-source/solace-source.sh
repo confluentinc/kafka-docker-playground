@@ -90,7 +90,12 @@ do
           cat /tmp/solace-cli.log
           exit 1
      fi
-     docker exec solace bash -c "/usr/sw/loads/currentload/bin/cli -A -s cliscripts/create_queue_cmd" > /tmp/solace-cli.log 2>&1
+     # '|| true' is required, not cosmetic: this script runs under 'set -e',
+     # and the CLI exits 2 while the broker is still starting ("SolOS startup
+     # in progress"). Without it the first attempt aborts the whole script
+     # before the loop can retry -- the until CONDITION is exempt from set -e,
+     # but the loop BODY is not.
+     docker exec solace bash -c "/usr/sw/loads/currentload/bin/cli -A -s cliscripts/create_queue_cmd" > /tmp/solace-cli.log 2>&1 || true
      sleep 5
      CUR_WAIT=$(( CUR_WAIT+5 ))
 done
