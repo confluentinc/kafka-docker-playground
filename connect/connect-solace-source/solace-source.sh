@@ -79,10 +79,12 @@ log "Create the queue connector-quickstart in the default Message VPN using CLI"
 # detects that the CLI is up. Verified against a live broker in all three
 # states: spool not ready -> "not AD-ACTIVE"/"Command Failed", no header;
 # spool ready but queue absent -> no header; queue present -> header.
-printf 'enable\nshow queue connector-quickstart\n' > ${DIR}/show_queue_check_cmd
-docker cp ${DIR}/show_queue_check_cmd solace:/usr/sw/jail/cliscripts/show_queue_check_cmd
+docker exec solace bash -c "printf 'enable\nshow queue connector-quickstart\n' > /usr/sw/jail/cliscripts/show_queue_check_cmd"
 MAX_WAIT=300
 CUR_WAIT=0
+# create the log up front: if the queue somehow already exists the loop body
+# never runs, and the unconditional 'cat' below would fail under set -e.
+: > /tmp/solace-cli.log
 until docker exec solace bash -c "/usr/sw/loads/currentload/bin/cli -A -s cliscripts/show_queue_check_cmd" 2>&1 | grep -q "Flags Legend"
 do
      if [[ "$CUR_WAIT" -gt "$MAX_WAIT" ]]; then
