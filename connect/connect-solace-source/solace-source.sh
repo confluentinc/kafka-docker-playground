@@ -34,7 +34,11 @@ cd ../../connect/connect-solace-source
 if [ ! -f ${DIR}/sol-jms-10.6.4.jar ]
 then
      log "Downloading sol-jms-10.6.4.jar"
-     wget -q https://repo1.maven.org/maven2/com/solacesystems/sol-jms/10.6.4/sol-jms-10.6.4.jar
+     # curl, not wget: the s390x Semaphore agent image ships curl but not
+     # wget, so wget fails here with "wget: command not found". curl is
+     # present on every agent (the pipeline prologue already uses it) and is
+     # the more common choice across the KDP connector scripts anyway.
+     curl --fail -sSL -O https://repo1.maven.org/maven2/com/solacesystems/sol-jms/10.6.4/sol-jms-10.6.4.jar
 fi
 cd -
 
@@ -45,7 +49,60 @@ wait_for_solace
 log "Solace UI is accessible at http://127.0.0.1:8080 (admin/admin)"
 
 log "Create the queue connector-quickstart in the default Message VPN using CLI"
-docker exec solace bash -c "/usr/sw/loads/currentload/bin/cli -A -s cliscripts/create_queue_cmd"
+# wait_for_solace only greps for "Running pre-startup checks", the FIRST line
+# Solace emits -- it is not a readiness signal. Issuing the config script
+# before SolOS has finished starting fails in two different ways:
+#     SolOS startup in progress, status: 'Starting daemon' / try again later
+#     message-spool operational status is not AD-ACTIVE / Command Failed
+# and neither is visible in the exit code, because the CLI returns 0 even when
+# commands inside a -s script fail.
+#
+# Measured on a native broker: the marker appears at t+12s, the CLI accepts
+# connections at t+17s, and `create queue` genuinely succeeds at t+22s -- so
+# the fixed sleep in wait_for_solace covers the gap on amd64. On s390x that
+# marker took 202s instead of 12s (~15x slower under emulation), stretching
+# the same gap well past the sleep. "Running pre-startup checks: [ OK ]" is
+# the only readiness-ish line the broker logs at all, so there is no later
+# marker to wait on.
+#
+# So verify the END STATE instead of pattern-matching failure text: retry
+# until `show queue` reports the queue. Matching error strings is what broke
+# the earlier attempt at this -- the retry has to be narrow enough not to spin
+# forever on "Queue already exists", which then let every other failure fall
+# through as success and left the queue silently uncreated. Asserting the
+# queue exists needs no such list, and is idempotent by construction: the
+# create only runs while the queue is absent.
+#
+# Match on "Flags Legend" -- the header of the queue listing table -- NOT on
+# the queue name. The CLI echoes each command it runs, so the queue name is
+# present in the output whether or not the queue exists, and matching it just
+# detects that the CLI is up. Verified against a live broker in all three
+# states: spool not ready -> "not AD-ACTIVE"/"Command Failed", no header;
+# spool ready but queue absent -> no header; queue present -> header.
+docker exec solace bash -c "printf 'enable\nshow queue connector-quickstart\n' > /usr/sw/jail/cliscripts/show_queue_check_cmd"
+MAX_WAIT=300
+CUR_WAIT=0
+# create the log up front: if the queue somehow already exists the loop body
+# never runs, and the unconditional 'cat' below would fail under set -e.
+: > /tmp/solace-cli.log
+until docker exec solace bash -c "/usr/sw/loads/currentload/bin/cli -A -s cliscripts/show_queue_check_cmd" 2>&1 | grep -q "Flags Legend"
+do
+     if [[ "$CUR_WAIT" -gt "$MAX_WAIT" ]]; then
+          logerror "queue connector-quickstart did not exist after $MAX_WAIT seconds"
+          cat /tmp/solace-cli.log
+          exit 1
+     fi
+     # '|| true' is required, not cosmetic: this script runs under 'set -e',
+     # and the CLI exits 2 while the broker is still starting ("SolOS startup
+     # in progress"). Without it the first attempt aborts the whole script
+     # before the loop can retry -- the until CONDITION is exempt from set -e,
+     # but the loop BODY is not.
+     docker exec solace bash -c "/usr/sw/loads/currentload/bin/cli -A -s cliscripts/create_queue_cmd" > /tmp/solace-cli.log 2>&1 || true
+     sleep 5
+     CUR_WAIT=$(( CUR_WAIT+5 ))
+done
+cat /tmp/solace-cli.log
+log "queue connector-quickstart confirmed present after ${CUR_WAIT}s"
 
 log "Publish messages to the Solace queue using the REST endpoint"
 
