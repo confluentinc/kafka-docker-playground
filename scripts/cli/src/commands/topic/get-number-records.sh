@@ -64,11 +64,19 @@ do
         # sr_password_url_encoded=$(urlencode $sr_password)
         grep -v "basic.auth.user.info" $root_folder/.ccloud/librdkafka_no_quotes_tmp.delta > $root_folder/.ccloud/librdkafka_no_quotes.delta
 
+        _kcat_image="confluentinc/cp-kcat:latest"
+        if [ "$(uname -m)" = "s390x" ]
+        then
+          # cp-kcat has no s390x manifest; fall back to the connect image, which ships kcat
+          get_connect_image
+          _kcat_image="${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG}"
+        fi
+
         case "${value_type}" in
         avro)
         docker run -i --network=host \
                 -v $root_folder/.ccloud/librdkafka_no_quotes.delta:/tmp/configuration/ccloud.properties \
-            confluentinc/cp-kcat:latest kcat \
+            "$_kcat_image" kcat \
                 -F /tmp/configuration/ccloud.properties \
                 -C -t $topic \
                 -s value=avro \
@@ -78,7 +86,7 @@ do
         *)
         docker run -i --network=host \
                 -v $root_folder/.ccloud/librdkafka_no_quotes.delta:/tmp/configuration/ccloud.properties \
-            confluentinc/cp-kcat:latest kcat \
+            "$_kcat_image" kcat \
                 -F /tmp/configuration/ccloud.properties \
                 -C -t $topic \
                 -e -q > /tmp/result.log 2>/dev/null
@@ -86,7 +94,7 @@ do
         esac
         wc -l /tmp/result.log | awk '{print $1}'
     else
-        tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+        tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
         if [ $? != 0 ] || [ "$tag" == "" ]
         then
             logerror "Could not find current CP version from docker ps"

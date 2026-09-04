@@ -446,8 +446,18 @@ function generate_data() {
             ;;
             avro)
                 schema_file_name="$(basename "${schema_file}")"
-                docker run --quiet --rm -v $tmp_dir:/tmp/ vdesabou/avro-tools random /tmp/out.avro --schema-file /tmp/$schema_file_name --count $nb_messages_to_generate --no-null "$no_null"
-                docker run --quiet --rm -v $tmp_dir:/tmp/ vdesabou/avro-tools tojson /tmp/out.avro > $tmp_dir/out.json
+                avro_tools_platform_flag=""
+                avro_tools_jvm_env_flag=""
+                if [ "$(uname -m)" = "s390x" ]
+                then
+                    # vdesabou/avro-tools has no s390x manifest, run it emulated via QEMU
+                    avro_tools_platform_flag="--platform linux/amd64"
+                    # QEMU crashes ("uncaught target signal 11") on JIT-generated
+                    # AVX/SSE instructions; force the JVM into interpreted mode.
+                    avro_tools_jvm_env_flag="-e JAVA_TOOL_OPTIONS=-Xint"
+                fi
+                docker run --quiet --rm $avro_tools_platform_flag $avro_tools_jvm_env_flag -v $tmp_dir:/tmp/ vdesabou/avro-tools random /tmp/out.avro --schema-file /tmp/$schema_file_name --count $nb_messages_to_generate --no-null "$no_null"
+                docker run --quiet --rm $avro_tools_platform_flag $avro_tools_jvm_env_flag -v $tmp_dir:/tmp/ vdesabou/avro-tools tojson /tmp/out.avro > $tmp_dir/out.json
             ;;
             json-schema)
                 # https://github.com/json-schema-faker/json-schema-faker/tree/master/docs
@@ -707,7 +717,7 @@ then
     fi
 
     set +e
-    tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+    tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
     if [ $? != 0 ] || [ "$tag" == "" ]
     then
         logerror "❌ Could not find current CP version from docker ps"
@@ -951,7 +961,7 @@ trap handle_signal SIGINT
 
 parameter_for_list_broker="--bootstrap-server"
 set +e
-tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
 if [ $? != 0 ] || [ "$tag" == "" ]
 then
     # default to --bootstrap-server

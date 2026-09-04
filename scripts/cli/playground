@@ -8944,7 +8944,9 @@ function urlencode() {
 }
 
 function base64() {
-  docker run -i --rm ddev/ddev-utilities:latest base64 -w 0 "$@"
+  # ddev/ddev-utilities is amd64-only; force the platform so QEMU/binfmt_misc
+  # emulation kicks in on s390x hosts instead of a manifest-list pull failure.
+  docker run --platform linux/amd64 -i --rm ddev/ddev-utilities:latest base64 -w 0 "$@"
 }
 
 function jq() {
@@ -9722,7 +9724,19 @@ function get_connect_image() {
 }
 
 function az() {
-  docker run --quiet --rm -v /tmp:/tmp -v $HOME/.azure:/home/az/.azure -e HOME=/home/az --rm -i mcr.microsoft.com/azure-cli:azurelinux3.0 az "$@"
+  local az_cli_platform_flag=""
+  local az_cli_ssl_env_flag=""
+  if [ "$(uname -m)" = "s390x" ]
+  then
+    # mcr.microsoft.com/azure-cli has no s390x manifest, run it emulated via QEMU
+    az_cli_platform_flag="--platform linux/amd64"
+    # QEMU's AES-NI emulation produces invalid TLS records ("record layer
+    # failure") on HTTPS requests; disabling OpenSSL's CPU-feature
+    # detection forces a software fallback that avoids the bug (see
+    # connect/CERTIFYING_S390X.md diagnostic table)
+    az_cli_ssl_env_flag="-e OPENSSL_ia32cap=0x0"
+  fi
+  docker run --quiet --rm $az_cli_platform_flag $az_cli_ssl_env_flag -v /tmp:/tmp -v $HOME/.azure:/home/az/.azure -e HOME=/home/az --rm -i mcr.microsoft.com/azure-cli:azurelinux3.0 az "$@"
 }
 
 function display_docker_container_error_log() {
@@ -20813,14 +20827,26 @@ playground_tools_read_avro_file_command() {
 
   filename=$(basename $file)
 
+  avro_tools_platform_flag=""
+  avro_tools_jvm_env_flag=""
+  if [ "$(uname -m)" = "s390x" ]
+  then
+    # vdesabou/avro-tools has no s390x manifest, run it emulated via QEMU
+    avro_tools_platform_flag="--platform linux/amd64"
+    # QEMU crashes ("uncaught target signal 11") on JIT-generated AVX/SSE
+    # instructions; force the JVM into interpreted mode to avoid it (see
+    # connect/CERTIFYING_S390X.md diagnostic table)
+    avro_tools_jvm_env_flag="-e JAVA_TOOL_OPTIONS=-Xint"
+  fi
+
   log "🔖 ${filename}.avro metadata"
-  docker run --quiet --rm -v ${file}:/tmp/${filename} vdesabou/avro-tools getmeta /tmp/${filename}
+  docker run --quiet --rm $avro_tools_platform_flag $avro_tools_jvm_env_flag -v ${file}:/tmp/${filename} vdesabou/avro-tools getmeta /tmp/${filename}
 
   log "🔖 ${filename}.avro schema"
-  docker run --quiet --rm -v ${file}:/tmp/${filename} vdesabou/avro-tools getschema /tmp/${filename}
+  docker run --quiet --rm $avro_tools_platform_flag $avro_tools_jvm_env_flag -v ${file}:/tmp/${filename} vdesabou/avro-tools getschema /tmp/${filename}
 
   log "🔖 ${filename}.avro content"
-  docker run --quiet --rm -v ${file}:/tmp/${filename} vdesabou/avro-tools tojson /tmp/${filename}
+  docker run --quiet --rm $avro_tools_platform_flag $avro_tools_jvm_env_flag -v ${file}:/tmp/${filename} vdesabou/avro-tools tojson /tmp/${filename}
 
 }
 
@@ -21153,7 +21179,7 @@ playground_debug_block_traffic_command() {
   docker exec $container type iptables > /dev/null 2>&1
   if [ $? != 0 ]
   then
-      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
       if [ $? != 0 ] || [ "$tag" == "" ]
       then
           logerror "Could not find current CP version from docker ps"
@@ -21330,7 +21356,7 @@ playground_debug_flight_recorder_command() {
   docker exec $container type jcmd > /dev/null 2>&1
   if [ $? != 0 ]
   then
-      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
       if [ $? != 0 ] || [ "$tag" == "" ]
       then
           logerror "Could not find current CP version from docker ps"
@@ -21913,7 +21939,7 @@ playground_topic_get_number_records_command() {
           esac
           wc -l /tmp/result.log | awk '{print $1}'
       else
-          tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+          tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
           if [ $? != 0 ] || [ "$tag" == "" ]
           then
               logerror "Could not find current CP version from docker ps"
@@ -22220,14 +22246,12 @@ playground_topic_consume_command() {
 
           if [[ ! $nb_messages =~ ^[0-9]+$ ]]
           then
-            echo $nb_messages | grep "does not exist" > /dev/null 2>&1
-            if [ $? == 0 ]
-            then
-              logwarn "❌ topic $topic does not exist !"
-            else
-              logwarn "❌ problem while getting number of messages: $nb_messages"
-            fi
-            exit 1
+            # s390x / source connectors: the target topic is created lazily on
+            # the first produced record and may not exist yet on slower arches.
+            # Treat a missing/non-numeric count as 0 and keep polling until the
+            # overall --timeout below fires, instead of exiting immediately
+            # (which made --timeout meaningless for source-connector verifies).
+            nb_messages=0
           fi
 
           if [ $nb_messages -ge $min_expected_messages ]
@@ -23117,8 +23141,18 @@ playground_topic_produce_command() {
               ;;
               avro)
                   schema_file_name="$(basename "${schema_file}")"
-                  docker run --quiet --rm -v $tmp_dir:/tmp/ vdesabou/avro-tools random /tmp/out.avro --schema-file /tmp/$schema_file_name --count $nb_messages_to_generate --no-null "$no_null"
-                  docker run --quiet --rm -v $tmp_dir:/tmp/ vdesabou/avro-tools tojson /tmp/out.avro > $tmp_dir/out.json
+                  avro_tools_platform_flag=""
+                  avro_tools_jvm_env_flag=""
+                  if [ "$(uname -m)" = "s390x" ]
+                  then
+                      # vdesabou/avro-tools has no s390x manifest, run it emulated via QEMU
+                      avro_tools_platform_flag="--platform linux/amd64"
+                      # QEMU crashes ("uncaught target signal 11") on JIT-generated
+                      # AVX/SSE instructions; force the JVM into interpreted mode.
+                      avro_tools_jvm_env_flag="-e JAVA_TOOL_OPTIONS=-Xint"
+                  fi
+                  docker run --quiet --rm $avro_tools_platform_flag $avro_tools_jvm_env_flag -v $tmp_dir:/tmp/ vdesabou/avro-tools random /tmp/out.avro --schema-file /tmp/$schema_file_name --count $nb_messages_to_generate --no-null "$no_null"
+                  docker run --quiet --rm $avro_tools_platform_flag $avro_tools_jvm_env_flag -v $tmp_dir:/tmp/ vdesabou/avro-tools tojson /tmp/out.avro > $tmp_dir/out.json
               ;;
               json-schema)
                   # https://github.com/json-schema-faker/json-schema-faker/tree/master/docs
@@ -23378,7 +23412,7 @@ playground_topic_produce_command() {
       fi
 
       set +e
-      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
       if [ $? != 0 ] || [ "$tag" == "" ]
       then
           logerror "❌ Could not find current CP version from docker ps"
@@ -23625,7 +23659,7 @@ playground_topic_produce_command() {
 
   parameter_for_list_broker="--bootstrap-server"
   set +e
-  tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+  tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
   if [ $? != 0 ] || [ "$tag" == "" ]
   then
       # default to --bootstrap-server
@@ -24615,7 +24649,7 @@ playground_connector_offsets_get_command() {
 
   if [ "$connector_type" != "$CONNECTOR_TYPE_FULLY_MANAGED" ] && [ "$connector_type" != "$CONNECTOR_TYPE_CUSTOM" ]
   then
-      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
       if [ $? != 0 ] || [ "$tag" == "" ]
       then
           logerror "❌ could not find current CP version from docker ps"
@@ -24743,7 +24777,7 @@ playground_connector_offsets_reset_command() {
 
   if [ "$connector_type" != "$CONNECTOR_TYPE_FULLY_MANAGED" ] && [ "$connector_type" != "$CONNECTOR_TYPE_CUSTOM" ]
   then
-      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
       if [ $? != 0 ] || [ "$tag" == "" ]
       then
           logerror "❌ could not find current CP version from docker ps"
@@ -24907,7 +24941,7 @@ playground_connector_offsets_alter_command() {
 
   if [ "$connector_type" != "$CONNECTOR_TYPE_FULLY_MANAGED" ] && [ "$connector_type" != "$CONNECTOR_TYPE_CUSTOM" ]
   then
-      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
       if [ $? != 0 ] || [ "$tag" == "" ]
       then
           logerror "❌ could not find current CP version from docker ps"
@@ -25338,7 +25372,7 @@ playground_connector_restart_command() {
           get_ccloud_connect
           handle_ccloud_connect_rest_api "curl -s --request POST \"https://api.confluent.cloud/connect/v1/environments/$environment/clusters/$cluster/connectors/$connector/restart\" --header \"authorization: Basic $authorization\""
       else
-              tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+              tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
               if [ $? != 0 ] || [ "$tag" == "" ]
               then
                   logerror "Could not find current CP version from docker ps"
@@ -25392,7 +25426,7 @@ playground_connector_stop_command() {
       fi
   fi
 
-  tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+  tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
   if [ $? != 0 ] || [ "$tag" == "" ]
   then
       logerror "❌ could not find current CP version from docker ps"
@@ -26792,7 +26826,7 @@ playground_connector_create_or_update_command() {
 
   if [[ -n "$initial_state" ]]
   then
-      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
       if [ $? != 0 ] || [ "$tag" == "" ]
       then
           logerror "❌ could not find current CP version from docker ps"
