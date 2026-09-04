@@ -786,18 +786,40 @@ function remove_partition() {
     done
 }
 
+function is_s390x() {
+  [ "$(uname -m)" = "s390x" ]
+}
+
+function qemu_openssl_software_fallback_flag() {
+  # QEMU's AES-NI emulation produces invalid TLS records ("record layer
+  # failure") on HTTPS requests; disabling OpenSSL's CPU-feature detection
+  # forces a software fallback that avoids the bug (see
+  # connect/S390X_CERTIFICATION.md diagnostic table)
+  if is_s390x
+  then
+    echo "-e OPENSSL_ia32cap=0x0"
+  fi
+}
+
+function avro_tools_run_flags() {
+  # vdesabou/avro-tools has no s390x manifest, run it emulated via QEMU;
+  # QEMU crashes ("uncaught target signal 11") on JIT-generated AVX/SSE
+  # instructions there, so also force the JVM into interpreted mode (see
+  # connect/S390X_CERTIFICATION.md diagnostic table)
+  if is_s390x
+  then
+    echo "--platform linux/amd64 -e JAVA_TOOL_OPTIONS=-Xint"
+  fi
+}
+
 function aws() {
     local aws_cli_platform_flag=""
     local aws_cli_ssl_env_flag=""
-    if [ "$(uname -m)" = "s390x" ]
+    if is_s390x
     then
       # amazon/aws-cli has no s390x manifest, run it emulated via QEMU
       aws_cli_platform_flag="--platform linux/amd64"
-      # QEMU's AES-NI emulation produces invalid TLS records ("record layer
-      # failure") on HTTPS requests; disabling OpenSSL's CPU-feature
-      # detection forces a software fallback that avoids the bug (see
-      # connect/CERTIFYING_S390X.md diagnostic table)
-      aws_cli_ssl_env_flag="-e OPENSSL_ia32cap=0x0"
+      aws_cli_ssl_env_flag="$(qemu_openssl_software_fallback_flag)"
     fi
     if [ ! -z "$AWS_REGION" ]
     then
@@ -876,7 +898,7 @@ function get_connect_image() {
   then
     if version_gt $CP_CONNECT_TAG 5.2.99
     then
-      if [ "$(uname -m)" = "s390x" ]
+      if is_s390x
       then
         CP_CONNECT_IMAGE=confluentinc/cp-server-connect
       else
@@ -891,15 +913,11 @@ function get_connect_image() {
 function az() {
   local az_cli_platform_flag=""
   local az_cli_ssl_env_flag=""
-  if [ "$(uname -m)" = "s390x" ]
+  if is_s390x
   then
     # mcr.microsoft.com/azure-cli has no s390x manifest, run it emulated via QEMU
     az_cli_platform_flag="--platform linux/amd64"
-    # QEMU's AES-NI emulation produces invalid TLS records ("record layer
-    # failure") on HTTPS requests; disabling OpenSSL's CPU-feature
-    # detection forces a software fallback that avoids the bug (see
-    # connect/CERTIFYING_S390X.md diagnostic table)
-    az_cli_ssl_env_flag="-e OPENSSL_ia32cap=0x0"
+    az_cli_ssl_env_flag="$(qemu_openssl_software_fallback_flag)"
   fi
   docker run --quiet --rm $az_cli_platform_flag $az_cli_ssl_env_flag -v /tmp:/tmp -v $HOME/.azure:/home/az/.azure -e HOME=/home/az --rm -i mcr.microsoft.com/azure-cli:azurelinux3.0 az "$@"
 }
@@ -1209,16 +1227,9 @@ function wait_container_ready() {
 
 function re_enable_auto_create_topics() {
   # Companion to the KAFKA_AUTO_CREATE_TOPICS_ENABLE=false gating in
-  # scripts/utils.sh (s390x only) -- confirmed necessary via a clean A/B
-  # re-test on a real s390x VM (this gate present vs absent, same VM, same
-  # connector): without it, Schema Registry crash-loops on a fresh
-  # environment; with it, the test passes. By the time this is called
-  # (after wait_container_ready, which already waits on connect's REST API
-  # -- and connect can't finish starting without Schema Registry being up
-  # first when using Avro), Schema Registry is confirmed healthy, so it's
-  # safe to turn auto-create back on for the rest of the test. No-op on
-  # non-s390x hosts. See connect/CERTIFYING_S390X.md.
-  if [ "$(uname -m)" != "s390x" ]
+  # scripts/utils.sh -- see connect/S390X_CERTIFICATION.md. No-op on
+  # non-s390x hosts.
+  if ! is_s390x
   then
     return 0
   fi

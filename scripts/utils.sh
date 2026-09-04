@@ -48,7 +48,7 @@ fi
 # pipelines that pin CP_VERSION) still need these picked correctly for s390x.
 if [ -z "$CP_CONNECT_IMAGE" ]
 then
-  if [ "$(uname -m)" = "s390x" ]
+  if is_s390x
   then
     export CP_CONNECT_IMAGE=confluentinc/cp-server-connect
   else
@@ -58,7 +58,7 @@ fi
 
 if [ -z "$CP_C3_NEXTGEN_TAG" ]
 then
-  if [ "$(uname -m)" = "s390x" ]
+  if is_s390x
   then
     export CP_C3_NEXTGEN_TAG=2.5.0
   else
@@ -68,22 +68,13 @@ fi
 
 if [ -z "$KAFKA_AUTO_CREATE_TOPICS_ENABLE" ]
 then
-  if [ "$(uname -m)" = "s390x" ]
+  if is_s390x
   then
-    # CONFIRMED via a clean A/B re-test on a real s390x VM (same VM, same
-    # connector, this gate present vs absent): without it, Schema Registry
-    # crash-loops on a fresh environment; with it, the test passes. Root
-    # cause: Kafka auto-creates `_schemas` with the default 'delete'
-    # cleanup policy, racing Schema Registry's own explicit 'compact'-policy
-    # create call on startup. The exact trigger for why this race resolves
-    # unfavorably on s390x (a working theory is Podman's CNI+dnsname DNS
-    # stack being slower than Docker's native bridge+DNS) is still not
-    # independently confirmed -- what IS confirmed is that this gate is
-    # necessary. Disable auto-create for the startup window;
-    # re_enable_auto_create_topics (called from environment/plaintext/start.sh
-    # after Schema Registry is confirmed healthy) turns it back on so
-    # connector tests that rely on auto-created topics still work. See
-    # connect/CERTIFYING_S390X.md.
+    # Confirmed via a clean A/B re-test on a real s390x VM: without this
+    # gate, Schema Registry crash-loops on a fresh environment. Disable
+    # auto-create for the startup window; re_enable_auto_create_topics()
+    # (called from environment/plaintext/start.sh once Schema Registry is
+    # healthy) turns it back on. See connect/S390X_CERTIFICATION.md.
     export KAFKA_AUTO_CREATE_TOPICS_ENABLE=false
   else
     export KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
@@ -118,9 +109,6 @@ then
     then
       export CP_KAFKA_IMAGE=confluentinc/cp-server
     fi
-
-    # CP_CONNECT_IMAGE / CP_C3_NEXTGEN_TAG are set unconditionally above,
-    # before this TAG check - see that block for why.
 
     if [ -z "$CP_SCHEMA_REGISTRY_IMAGE" ]
     then
@@ -333,7 +321,7 @@ else
         else
           if [ -z "$CP_CONNECT_IMAGE" ]
           then
-            if [ "$(uname -m)" = "s390x" ]
+            if is_s390x
             then
               export CP_CONNECT_IMAGE=confluentinc/cp-server-connect
             else

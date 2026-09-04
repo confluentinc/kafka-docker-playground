@@ -65,7 +65,7 @@ do
         grep -v "basic.auth.user.info" $root_folder/.ccloud/librdkafka_no_quotes_tmp.delta > $root_folder/.ccloud/librdkafka_no_quotes.delta
 
         _kcat_image="confluentinc/cp-kcat:latest"
-        if [ "$(uname -m)" = "s390x" ]
+        if is_s390x
         then
           # cp-kcat has no s390x manifest; fall back to the connect image, which ships kcat
           get_connect_image
