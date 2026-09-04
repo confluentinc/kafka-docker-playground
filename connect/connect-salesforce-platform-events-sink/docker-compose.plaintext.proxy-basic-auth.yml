@@ -8,16 +8,19 @@ services:
     ports:
       - "8888:8888"
     volumes:
-      - ../../connect/connect-salesforce-platform-events-sink/squid/passwords:/etc/squid/passwords
-      - ../../connect/connect-salesforce-platform-events-sink/squid/squid.conf:/etc/squid/squid.conf
+      - ../../connect/connect-salesforce-platform-events-sink/squid/passwords:/etc/squid/passwords:z
+      - ../../connect/connect-salesforce-platform-events-sink/squid/squid.conf:/etc/squid/squid.conf:z
 
   sfdx-cli:
     image: vdesabou/sfdx-cli:latest # forked from salestrip/sfdx-cli to add plugin sfpowerkit
+    platform: linux/amd64
     hostname: sfdx-cli
     container_name: sfdx-cli
     command: "sleep infinity"
+    environment:
+      OPENSSL_ia32cap: "0x0"
     volumes:
-    - ../../connect/connect-salesforce-platform-events-sink/event.apex:/tmp/event.apex
+    - ../../connect/connect-salesforce-platform-events-sink/event.apex:/tmp/event.apex:z
 
 
   connect:
