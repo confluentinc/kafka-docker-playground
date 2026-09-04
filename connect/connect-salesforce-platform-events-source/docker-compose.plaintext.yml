@@ -3,11 +3,14 @@ services:
 
   sfdx-cli:
     image: vdesabou/sfdx-cli:latest # forked from salestrip/sfdx-cli to add plugin sfpowerkit
+    platform: linux/amd64
     hostname: sfdx-cli
     container_name: sfdx-cli
     command: "sleep infinity"
+    environment:
+      OPENSSL_ia32cap: "0x0"
     volumes:
-    - ../../connect/connect-salesforce-platform-events-source/event.apex:/tmp/event.apex
+    - ../../connect/connect-salesforce-platform-events-source/event.apex:/tmp/event.apex:z
 
   connect:
     environment:
