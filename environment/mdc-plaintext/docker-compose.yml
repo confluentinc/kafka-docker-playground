@@ -200,7 +200,7 @@ services:
       # JAVA_DEBUG_OPTS: '-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=0.0.0.0:5005'
       CONNECT_CONNECTOR_CLIENT_CONFIG_OVERRIDE_POLICY: All
     volumes:
-      - ../../confluent-hub:/usr/share/confluent-hub-components
+      - ../../confluent-hub:/usr/share/confluent-hub-components:z
 
   connect-europe:
     image: ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG}
@@ -245,7 +245,7 @@ services:
       # JAVA_DEBUG_OPTS: '-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=0.0.0.0:5005'
       CONNECT_CONNECTOR_CLIENT_CONFIG_OVERRIDE_POLICY: All
     volumes:
-      - ../../confluent-hub:/usr/share/confluent-hub-components
+      - ../../confluent-hub:/usr/share/confluent-hub-components:z
       
   schema-registry-europe:
     image: ${CP_SCHEMA_REGISTRY_IMAGE}:${CP_SCHEMA_REGISTRY_TAG}

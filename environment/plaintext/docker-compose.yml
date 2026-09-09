@@ -259,7 +259,7 @@ services:
       - "10002:10002"
     volumes:
       - ../../environment/plaintext/jmx-exporter:/usr/share/jmx_exporter/
-      - ../../confluent-hub:/usr/share/confluent-hub-components
+      - ../../confluent-hub:/usr/share/confluent-hub-components:z
     environment:
       KAFKA_JMX_PORT: 10002
       KAFKA_JMX_HOSTNAME: localhost
@@ -330,7 +330,7 @@ services:
       - "connect_nodes"
     volumes:
       - ./jmx-exporter:/usr/share/jmx_exporter/
-      - ../../confluent-hub:/usr/share/confluent-hub-components
+      - ../../confluent-hub:/usr/share/confluent-hub-components:z
     environment:
       KAFKA_JMX_PORT: 10022
       KAFKA_JMX_HOSTNAME: localhost
@@ -402,7 +402,7 @@ services:
       - "connect_nodes"
     volumes:
       - ./jmx-exporter:/usr/share/jmx_exporter/
-      - ../../confluent-hub:/usr/share/confluent-hub-components
+      - ../../confluent-hub:/usr/share/confluent-hub-components:z
     environment:
       KAFKA_JMX_PORT: 10032
       KAFKA_JMX_HOSTNAME: localhost

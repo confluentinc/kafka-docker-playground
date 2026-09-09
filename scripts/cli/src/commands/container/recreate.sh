@@ -44,3 +44,4 @@ log "💫 Recreate container(s)"
 bash /tmp/playground-command
 
 wait_container_ready
+re_enable_auto_create_topics
