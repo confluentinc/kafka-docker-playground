@@ -8,7 +8,13 @@ function confluent_hub_install_chown_suffix {
   # rootless container re-maps through /etc/subuid/subgid instead of writing
   # it literally, handing the tree to an unrelated subuid-shifted owner the
   # host user can then no longer read or write.
-  if command -v podman >/dev/null 2>&1 && [ "$(podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null)" = "true" ]
+  #
+  # The install above always runs via the literal "docker" binary, so what
+  # matters is whether THAT binary is actually Podman's docker-compat shim --
+  # not merely whether a separate "podman" binary happens to also be on
+  # PATH. Podman's shim reports its real identity in "docker --version"
+  # (e.g. "podman version 4.x.x"); real Docker Engine never does.
+  if docker --version 2>/dev/null | grep -qi podman && [ "$(docker info --format '{{.Host.Security.Rootless}}' 2>/dev/null)" = "true" ]
   then
     echo ""
   else
@@ -46,16 +52,12 @@ fi
 # Architecture-aware defaults - deliberately unconditional (not nested inside
 # the "if [ -z $TAG ]" block below), since callers that pre-set TAG (e.g. CI
 # pipelines that pin CP_VERSION) still need these picked correctly for s390x.
-if [ -z "$CP_CONNECT_IMAGE" ]
-then
-  if is_s390x
-  then
-    export CP_CONNECT_IMAGE=confluentinc/cp-server-connect
-  else
-    export CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
-  fi
-fi
-
+# CP_CONNECT_IMAGE is NOT included here: it has its own version-gated default
+# further down (both for the default-TAG path below and for the pre-5.3
+# TAG_BASE check further down), and setting it unconditionally here would
+# make those "if [ -z "$CP_CONNECT_IMAGE" ]" guards always false, silently
+# skipping the pre-5.3 cp-kafka-connect-base selection for callers who pin an
+# old TAG.
 if [ -z "$CP_C3_NEXTGEN_TAG" ]
 then
   if is_s390x
@@ -108,6 +110,16 @@ then
     if [ -z "$CP_KAFKA_IMAGE" ]
     then
       export CP_KAFKA_IMAGE=confluentinc/cp-server
+    fi
+
+    if [ -z "$CP_CONNECT_IMAGE" ]
+    then
+      if is_s390x
+      then
+        export CP_CONNECT_IMAGE=confluentinc/cp-server-connect
+      else
+        export CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
+      fi
     fi
 
     if [ -z "$CP_SCHEMA_REGISTRY_IMAGE" ]

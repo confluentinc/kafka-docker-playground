@@ -10067,17 +10067,19 @@ function wait_container_ready() {
 function re_enable_auto_create_topics() {
   # Companion to the KAFKA_AUTO_CREATE_TOPICS_ENABLE=false gating in
   # scripts/utils.sh -- see connect/S390X_CERTIFICATION.md. No-op on
-  # non-s390x hosts.
+  # non-s390x hosts. Takes the broker container name (default "broker";
+  # mdc-plaintext has two, "broker-europe" and "broker-us").
+  local broker_name="${1:-broker}"
   if ! is_s390x
   then
     return 0
   fi
-  if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^broker$'
+  if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${broker_name}$"
   then
     return 0
   fi
-  log "🔧 s390x: re-enabling auto.create.topics.enable now that Schema Registry is up"
-  docker exec broker kafka-configs --bootstrap-server broker:9092 --entity-type brokers --entity-default --alter --add-config auto.create.topics.enable=true > /dev/null 2>&1 || true
+  log "🔧 s390x: re-enabling auto.create.topics.enable on ${broker_name} now that Schema Registry is up"
+  docker exec "$broker_name" kafka-configs --bootstrap-server "${broker_name}:9092" --entity-type brokers --entity-default --alter --add-config auto.create.topics.enable=true > /dev/null 2>&1 || true
 }
 
 function display_jmx_info() {
@@ -21594,7 +21596,13 @@ playground_container_recreate_command() {
   bash /tmp/playground-command
 
   wait_container_ready
-  re_enable_auto_create_topics
+  if [ "$environment" == "mdc-plaintext" ]
+  then
+    re_enable_auto_create_topics broker-europe
+    re_enable_auto_create_topics broker-us
+  else
+    re_enable_auto_create_topics
+  fi
 }
 
 # :command.function
@@ -22275,12 +22283,25 @@ playground_topic_consume_command() {
 
           if [[ ! $nb_messages =~ ^[0-9]+$ ]]
           then
-            # s390x / source connectors: the target topic is created lazily on
-            # the first produced record and may not exist yet on slower arches.
-            # Treat a missing/non-numeric count as 0 and keep polling until the
-            # overall --timeout below fires, instead of exiting immediately
-            # (which made --timeout meaningless for source-connector verifies).
-            nb_messages=0
+            if is_s390x
+            then
+              # source connectors: the target topic is created lazily on the
+              # first produced record and may not exist yet under QEMU
+              # emulation. Treat a missing/non-numeric count as 0 and keep
+              # polling until the overall --timeout below fires, instead of
+              # exiting immediately (which made --timeout meaningless for
+              # source-connector verifies on s390x).
+              nb_messages=0
+            else
+              echo $nb_messages | grep "does not exist" > /dev/null 2>&1
+              if [ $? == 0 ]
+              then
+                logwarn "❌ topic $topic does not exist !"
+              else
+                logwarn "❌ problem while getting number of messages: $nb_messages"
+              fi
+              exit 1
+            fi
           fi
 
           if [ $nb_messages -ge $min_expected_messages ]

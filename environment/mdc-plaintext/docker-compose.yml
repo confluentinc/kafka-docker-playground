@@ -48,6 +48,9 @@ services:
       KAFKA_ZOOKEEPER_CONNECT: 'zookeeper-europe:2181'
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker-europe:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      # s390x: see KAFKA_AUTO_CREATE_TOPICS_ENABLE gating in scripts/utils.sh
+      # and connect/S390X_CERTIFICATION.md.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: ${KAFKA_AUTO_CREATE_TOPICS_ENABLE:-true}
       CONFLUENT_SUPPORT_CUSTOMER_ID: 'anonymous'
       # Confluent Metrics Reporter for Control Center Cluster Monitoring
       KAFKA_METRIC_REPORTERS: $KAFKA_METRIC_REPORTERS
@@ -91,6 +94,9 @@ services:
       KAFKA_ZOOKEEPER_CONNECT: 'zookeeper-us:2181'
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker-us:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      # s390x: see KAFKA_AUTO_CREATE_TOPICS_ENABLE gating in scripts/utils.sh
+      # and connect/S390X_CERTIFICATION.md.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: ${KAFKA_AUTO_CREATE_TOPICS_ENABLE:-true}
       CONFLUENT_SUPPORT_CUSTOMER_ID: 'anonymous'
       # Confluent Metrics Reporter for Control Center Cluster Monitoring
       KAFKA_METRIC_REPORTERS: $KAFKA_METRIC_REPORTERS

@@ -1228,17 +1228,19 @@ function wait_container_ready() {
 function re_enable_auto_create_topics() {
   # Companion to the KAFKA_AUTO_CREATE_TOPICS_ENABLE=false gating in
   # scripts/utils.sh -- see connect/S390X_CERTIFICATION.md. No-op on
-  # non-s390x hosts.
+  # non-s390x hosts. Takes the broker container name (default "broker";
+  # mdc-plaintext has two, "broker-europe" and "broker-us").
+  local broker_name="${1:-broker}"
   if ! is_s390x
   then
     return 0
   fi
-  if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^broker$'
+  if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${broker_name}$"
   then
     return 0
   fi
-  log "🔧 s390x: re-enabling auto.create.topics.enable now that Schema Registry is up"
-  docker exec broker kafka-configs --bootstrap-server broker:9092 --entity-type brokers --entity-default --alter --add-config auto.create.topics.enable=true > /dev/null 2>&1 || true
+  log "🔧 s390x: re-enabling auto.create.topics.enable on ${broker_name} now that Schema Registry is up"
+  docker exec "$broker_name" kafka-configs --bootstrap-server "${broker_name}:9092" --entity-type brokers --entity-default --alter --add-config auto.create.topics.enable=true > /dev/null 2>&1 || true
 }
 
 function display_jmx_info() {
