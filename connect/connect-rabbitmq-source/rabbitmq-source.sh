@@ -78,7 +78,7 @@ sleep 10
 
 log "[A] per-task queue assignment (informational)"
 docker exec connect curl -s http://localhost:8083/connectors/rabbitmq-source-map/tasks \
-  | jq -c '.[] | {task: .id.task, queues: (.config["rabbitmq.queue"] | split(","))}'
+  | jq -c '.[] | {task: .id.task, queues: (.config["rabbitmq.queue"] | split(","))}' || true
 
 # dedicated mode -> each queue is consumed by exactly ONE task
 log "[A] asserting each queue has exactly 1 consumer (dedicated topology)"

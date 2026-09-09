@@ -8944,7 +8944,9 @@ function urlencode() {
 }
 
 function base64() {
-  docker run -i --rm ddev/ddev-utilities:latest base64 -w 0 "$@"
+  # ddev/ddev-utilities is amd64-only; force the platform so QEMU/binfmt_misc
+  # emulation kicks in on s390x hosts instead of a manifest-list pull failure.
+  docker run --platform linux/amd64 -i --rm ddev/ddev-utilities:latest base64 -w 0 "$@"
 }
 
 function jq() {
@@ -9636,6 +9638,32 @@ function remove_partition() {
     done
 }
 
+function is_s390x() {
+  [ "$(uname -m)" = "s390x" ]
+}
+
+function qemu_openssl_software_fallback_flag() {
+  # QEMU's AES-NI emulation produces invalid TLS records ("record layer
+  # failure") on HTTPS requests; disabling OpenSSL's CPU-feature detection
+  # forces a software fallback that avoids the bug (see
+  # connect/S390X_CERTIFICATION.md diagnostic table)
+  if is_s390x
+  then
+    echo "-e OPENSSL_ia32cap=0x0"
+  fi
+}
+
+function avro_tools_run_flags() {
+  # vdesabou/avro-tools has no s390x manifest, run it emulated via QEMU;
+  # QEMU crashes ("uncaught target signal 11") on JIT-generated AVX/SSE
+  # instructions there, so also force the JVM into interpreted mode (see
+  # connect/S390X_CERTIFICATION.md diagnostic table)
+  if is_s390x
+  then
+    echo "--platform linux/amd64 -e JAVA_TOOL_OPTIONS=-Xint"
+  fi
+}
+
 function aws() {
     if [ ! -z "$AWS_REGION" ]
     then
@@ -9722,7 +9750,15 @@ function get_connect_image() {
 }
 
 function az() {
-  docker run --quiet --rm -v /tmp:/tmp -v $HOME/.azure:/home/az/.azure -e HOME=/home/az --rm -i mcr.microsoft.com/azure-cli:azurelinux3.0 az "$@"
+  local az_cli_platform_flag=""
+  local az_cli_ssl_env_flag=""
+  if is_s390x
+  then
+    # mcr.microsoft.com/azure-cli has no s390x manifest, run it emulated via QEMU
+    az_cli_platform_flag="--platform linux/amd64"
+    az_cli_ssl_env_flag="$(qemu_openssl_software_fallback_flag)"
+  fi
+  docker run --quiet --rm $az_cli_platform_flag $az_cli_ssl_env_flag -v /tmp:/tmp -v $HOME/.azure:/home/az/.azure -e HOME=/home/az --rm -i mcr.microsoft.com/azure-cli:azurelinux3.0 az "$@"
 }
 
 function display_docker_container_error_log() {
@@ -10026,6 +10062,24 @@ function wait_container_ready() {
   fi
 
   log "🚦 containers have started!"
+}
+
+function re_enable_auto_create_topics() {
+  # Companion to the KAFKA_AUTO_CREATE_TOPICS_ENABLE=false gating in
+  # scripts/utils.sh -- see connect/S390X_CERTIFICATION.md. No-op on
+  # non-s390x hosts. Takes the broker container name (default "broker";
+  # mdc-plaintext has two, "broker-europe" and "broker-us").
+  local broker_name="${1:-broker}"
+  if ! is_s390x
+  then
+    return 0
+  fi
+  if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${broker_name}$"
+  then
+    return 0
+  fi
+  log "🔧 s390x: re-enabling auto.create.topics.enable on ${broker_name} now that Schema Registry is up"
+  docker exec "$broker_name" kafka-configs --bootstrap-server "${broker_name}:9092" --entity-type brokers --entity-default --alter --add-config auto.create.topics.enable=true > /dev/null 2>&1 || true
 }
 
 function display_jmx_info() {
@@ -20813,14 +20867,16 @@ playground_tools_read_avro_file_command() {
 
   filename=$(basename $file)
 
+  avro_tools_flags=$(avro_tools_run_flags)
+
   log "🔖 ${filename}.avro metadata"
-  docker run --quiet --rm -v ${file}:/tmp/${filename} vdesabou/avro-tools getmeta /tmp/${filename}
+  docker run --quiet --rm $avro_tools_flags -v ${file}:/tmp/${filename} vdesabou/avro-tools getmeta /tmp/${filename}
 
   log "🔖 ${filename}.avro schema"
-  docker run --quiet --rm -v ${file}:/tmp/${filename} vdesabou/avro-tools getschema /tmp/${filename}
+  docker run --quiet --rm $avro_tools_flags -v ${file}:/tmp/${filename} vdesabou/avro-tools getschema /tmp/${filename}
 
   log "🔖 ${filename}.avro content"
-  docker run --quiet --rm -v ${file}:/tmp/${filename} vdesabou/avro-tools tojson /tmp/${filename}
+  docker run --quiet --rm $avro_tools_flags -v ${file}:/tmp/${filename} vdesabou/avro-tools tojson /tmp/${filename}
 
 }
 
@@ -21153,7 +21209,7 @@ playground_debug_block_traffic_command() {
   docker exec $container type iptables > /dev/null 2>&1
   if [ $? != 0 ]
   then
-      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
       if [ $? != 0 ] || [ "$tag" == "" ]
       then
           logerror "Could not find current CP version from docker ps"
@@ -21330,7 +21386,7 @@ playground_debug_flight_recorder_command() {
   docker exec $container type jcmd > /dev/null 2>&1
   if [ $? != 0 ]
   then
-      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
       if [ $? != 0 ] || [ "$tag" == "" ]
       then
           logerror "Could not find current CP version from docker ps"
@@ -21540,6 +21596,13 @@ playground_container_recreate_command() {
   bash /tmp/playground-command
 
   wait_container_ready
+  if [ "$environment" == "mdc-plaintext" ]
+  then
+    re_enable_auto_create_topics broker-europe
+    re_enable_auto_create_topics broker-us
+  else
+    re_enable_auto_create_topics
+  fi
 }
 
 # :command.function
@@ -21913,7 +21976,7 @@ playground_topic_get_number_records_command() {
           esac
           wc -l /tmp/result.log | awk '{print $1}'
       else
-          tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+          tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
           if [ $? != 0 ] || [ "$tag" == "" ]
           then
               logerror "Could not find current CP version from docker ps"
@@ -22220,14 +22283,25 @@ playground_topic_consume_command() {
 
           if [[ ! $nb_messages =~ ^[0-9]+$ ]]
           then
-            echo $nb_messages | grep "does not exist" > /dev/null 2>&1
-            if [ $? == 0 ]
+            if is_s390x
             then
-              logwarn "❌ topic $topic does not exist !"
+              # source connectors: the target topic is created lazily on the
+              # first produced record and may not exist yet under QEMU
+              # emulation. Treat a missing/non-numeric count as 0 and keep
+              # polling until the overall --timeout below fires, instead of
+              # exiting immediately (which made --timeout meaningless for
+              # source-connector verifies on s390x).
+              nb_messages=0
             else
-              logwarn "❌ problem while getting number of messages: $nb_messages"
+              echo $nb_messages | grep "does not exist" > /dev/null 2>&1
+              if [ $? == 0 ]
+              then
+                logwarn "❌ topic $topic does not exist !"
+              else
+                logwarn "❌ problem while getting number of messages: $nb_messages"
+              fi
+              exit 1
             fi
-            exit 1
           fi
 
           if [ $nb_messages -ge $min_expected_messages ]
@@ -23117,8 +23191,9 @@ playground_topic_produce_command() {
               ;;
               avro)
                   schema_file_name="$(basename "${schema_file}")"
-                  docker run --quiet --rm -v $tmp_dir:/tmp/ vdesabou/avro-tools random /tmp/out.avro --schema-file /tmp/$schema_file_name --count $nb_messages_to_generate --no-null "$no_null"
-                  docker run --quiet --rm -v $tmp_dir:/tmp/ vdesabou/avro-tools tojson /tmp/out.avro > $tmp_dir/out.json
+                  avro_tools_flags=$(avro_tools_run_flags)
+                  docker run --quiet --rm $avro_tools_flags -v $tmp_dir:/tmp/ vdesabou/avro-tools random /tmp/out.avro --schema-file /tmp/$schema_file_name --count $nb_messages_to_generate --no-null "$no_null"
+                  docker run --quiet --rm $avro_tools_flags -v $tmp_dir:/tmp/ vdesabou/avro-tools tojson /tmp/out.avro > $tmp_dir/out.json
               ;;
               json-schema)
                   # https://github.com/json-schema-faker/json-schema-faker/tree/master/docs
@@ -23378,7 +23453,7 @@ playground_topic_produce_command() {
       fi
 
       set +e
-      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
       if [ $? != 0 ] || [ "$tag" == "" ]
       then
           logerror "❌ Could not find current CP version from docker ps"
@@ -23625,7 +23700,7 @@ playground_topic_produce_command() {
 
   parameter_for_list_broker="--bootstrap-server"
   set +e
-  tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+  tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
   if [ $? != 0 ] || [ "$tag" == "" ]
   then
       # default to --bootstrap-server
@@ -24615,7 +24690,7 @@ playground_connector_offsets_get_command() {
 
   if [ "$connector_type" != "$CONNECTOR_TYPE_FULLY_MANAGED" ] && [ "$connector_type" != "$CONNECTOR_TYPE_CUSTOM" ]
   then
-      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
       if [ $? != 0 ] || [ "$tag" == "" ]
       then
           logerror "❌ could not find current CP version from docker ps"
@@ -24743,7 +24818,7 @@ playground_connector_offsets_reset_command() {
 
   if [ "$connector_type" != "$CONNECTOR_TYPE_FULLY_MANAGED" ] && [ "$connector_type" != "$CONNECTOR_TYPE_CUSTOM" ]
   then
-      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
       if [ $? != 0 ] || [ "$tag" == "" ]
       then
           logerror "❌ could not find current CP version from docker ps"
@@ -24907,7 +24982,7 @@ playground_connector_offsets_alter_command() {
 
   if [ "$connector_type" != "$CONNECTOR_TYPE_FULLY_MANAGED" ] && [ "$connector_type" != "$CONNECTOR_TYPE_CUSTOM" ]
   then
-      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
       if [ $? != 0 ] || [ "$tag" == "" ]
       then
           logerror "❌ could not find current CP version from docker ps"
@@ -25338,7 +25413,7 @@ playground_connector_restart_command() {
           get_ccloud_connect
           handle_ccloud_connect_rest_api "curl -s --request POST \"https://api.confluent.cloud/connect/v1/environments/$environment/clusters/$cluster/connectors/$connector/restart\" --header \"authorization: Basic $authorization\""
       else
-              tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+              tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
               if [ $? != 0 ] || [ "$tag" == "" ]
               then
                   logerror "Could not find current CP version from docker ps"
@@ -25392,7 +25467,7 @@ playground_connector_stop_command() {
       fi
   fi
 
-  tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+  tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
   if [ $? != 0 ] || [ "$tag" == "" ]
   then
       logerror "❌ could not find current CP version from docker ps"
@@ -26792,7 +26867,7 @@ playground_connector_create_or_update_command() {
 
   if [[ -n "$initial_state" ]]
   then
-      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect-.*:' | awk -F':' '{print $2}')
+      tag=$(docker ps --format '{{.Image}}' | grep -E 'confluentinc/cp-.*-connect.*:' | awk -F':' '{print $2}')
       if [ $? != 0 ] || [ "$tag" == "" ]
       then
           logerror "❌ could not find current CP version from docker ps"

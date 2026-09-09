@@ -81,7 +81,9 @@ function urlencode() {
 }
 
 function base64() {
-  docker run -i --rm ddev/ddev-utilities:latest base64 -w 0 "$@"
+  # ddev/ddev-utilities is amd64-only; force the platform so QEMU/binfmt_misc
+  # emulation kicks in on s390x hosts instead of a manifest-list pull failure.
+  docker run --platform linux/amd64 -i --rm ddev/ddev-utilities:latest base64 -w 0 "$@"
 }
 
 function jq() {
@@ -275,6 +277,14 @@ function maybe_create_image()
         else
           CONNECT_3RDPARTY_INSTALL="if [ ! -f /tmp/done ]; then yum -y install --disablerepo='Confluent*' bind-utils openssl unzip findutils net-tools nc jq which iptables libmnl krb5-workstation krb5-libs vim && yum clean all && rm -rf /var/cache/yum && rpm -i --nosignature https://yum.oracle.com/repo/OracleLinux/OL8/appstream/aarch64/getPackage/tcpdump-4.9.3-3.el8.aarch64.rpm && touch /tmp/done; fi"
         fi
+      elif [ "$(uname -m)" = "s390x" ]
+      then
+        # Confluent has never published a CP image for s390x below 8.2, so
+        # the pre-8.1 yum/tcpdump-RPM tiers that exist for arm64/x86_64 above
+        # can't apply here -- a running s390x image guarantees CP 8.2+ and
+        # microdnf, and that base image already carries tcpdump via its own
+        # repos (no separate RPM download needed, unlike the older tiers).
+        CONNECT_3RDPARTY_INSTALL="if [ ! -f /tmp/done ]; then microdnf -y install bind-utils openssl unzip findutils net-tools nc jq which iptables libmnl krb5-workstation krb5-libs vim && microdnf clean all && touch /tmp/done; fi"
       else
         if version_gt $TAG_BASE "7.9.9"
         then
@@ -776,7 +786,41 @@ function remove_partition() {
     done
 }
 
+function is_s390x() {
+  [ "$(uname -m)" = "s390x" ]
+}
+
+function qemu_openssl_software_fallback_flag() {
+  # QEMU's AES-NI emulation produces invalid TLS records ("record layer
+  # failure") on HTTPS requests; disabling OpenSSL's CPU-feature detection
+  # forces a software fallback that avoids the bug (see
+  # connect/S390X_CERTIFICATION.md diagnostic table)
+  if is_s390x
+  then
+    echo "-e OPENSSL_ia32cap=0x0"
+  fi
+}
+
+function avro_tools_run_flags() {
+  # vdesabou/avro-tools has no s390x manifest, run it emulated via QEMU;
+  # QEMU crashes ("uncaught target signal 11") on JIT-generated AVX/SSE
+  # instructions there, so also force the JVM into interpreted mode (see
+  # connect/S390X_CERTIFICATION.md diagnostic table)
+  if is_s390x
+  then
+    echo "--platform linux/amd64 -e JAVA_TOOL_OPTIONS=-Xint"
+  fi
+}
+
 function aws() {
+    local aws_cli_platform_flag=""
+    local aws_cli_ssl_env_flag=""
+    if is_s390x
+    then
+      # amazon/aws-cli has no s390x manifest, run it emulated via QEMU
+      aws_cli_platform_flag="--platform linux/amd64"
+      aws_cli_ssl_env_flag="$(qemu_openssl_software_fallback_flag)"
+    fi
     if [ ! -z "$AWS_REGION" ]
     then
       if [ ! -f $HOME/.aws/config ]
@@ -803,9 +847,9 @@ EOF
       # log "💭 Using environment variables AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"
       if [ -f $aws_tmp_dir/config ]
       then
-        docker run --quiet --rm -iv $aws_tmp_dir/config:/root/.aws/config -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" -e AWS_SESSION_TOKEN="$AWS_SESSION_TOKEN" -v $(pwd):/aws -v /tmp:/tmp amazon/aws-cli "$@"
+        docker run --quiet --rm $aws_cli_platform_flag $aws_cli_ssl_env_flag -iv $aws_tmp_dir/config:/root/.aws/config -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" -e AWS_SESSION_TOKEN="$AWS_SESSION_TOKEN" -v $(pwd):/aws -v /tmp:/tmp amazon/aws-cli "$@"
       else
-        docker run --quiet --rm -iv $HOME/.aws/config:/root/.aws/config -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" -e AWS_SESSION_TOKEN="$AWS_SESSION_TOKEN" -v $(pwd):/aws -v /tmp:/tmp amazon/aws-cli "$@"
+        docker run --quiet --rm $aws_cli_platform_flag $aws_cli_ssl_env_flag -iv $HOME/.aws/config:/root/.aws/config -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" -e AWS_SESSION_TOKEN="$AWS_SESSION_TOKEN" -v $(pwd):/aws -v /tmp:/tmp amazon/aws-cli "$@"
       fi
     else
       if [ ! -f $HOME/.aws/credentials ]
@@ -813,7 +857,7 @@ EOF
         logerror "❌ $HOME/.aws/credentials does not exist"
       else
         # log "💭 AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are set based on $HOME/.aws/credentials"
-        docker run --quiet --rm -iv $HOME/.aws:/root/.aws -v $(pwd):/aws -v /tmp:/tmp amazon/aws-cli "$@"
+        docker run --quiet --rm $aws_cli_platform_flag $aws_cli_ssl_env_flag -iv $HOME/.aws:/root/.aws -v $(pwd):/aws -v /tmp:/tmp amazon/aws-cli "$@"
       fi
     fi
 }
@@ -854,7 +898,12 @@ function get_connect_image() {
   then
     if version_gt $CP_CONNECT_TAG 5.2.99
     then
-      CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
+      if is_s390x
+      then
+        CP_CONNECT_IMAGE=confluentinc/cp-server-connect
+      else
+        CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
+      fi
     else
       CP_CONNECT_IMAGE=confluentinc/cp-kafka-connect-base
     fi
@@ -862,7 +911,15 @@ function get_connect_image() {
 }
 
 function az() {
-  docker run --quiet --rm -v /tmp:/tmp -v $HOME/.azure:/home/az/.azure -e HOME=/home/az --rm -i mcr.microsoft.com/azure-cli:azurelinux3.0 az "$@"
+  local az_cli_platform_flag=""
+  local az_cli_ssl_env_flag=""
+  if is_s390x
+  then
+    # mcr.microsoft.com/azure-cli has no s390x manifest, run it emulated via QEMU
+    az_cli_platform_flag="--platform linux/amd64"
+    az_cli_ssl_env_flag="$(qemu_openssl_software_fallback_flag)"
+  fi
+  docker run --quiet --rm $az_cli_platform_flag $az_cli_ssl_env_flag -v /tmp:/tmp -v $HOME/.azure:/home/az/.azure -e HOME=/home/az --rm -i mcr.microsoft.com/azure-cli:azurelinux3.0 az "$@"
 }
 
 function display_docker_container_error_log() {
@@ -1166,6 +1223,24 @@ function wait_container_ready() {
   fi
 
   log "🚦 containers have started!"
+}
+
+function re_enable_auto_create_topics() {
+  # Companion to the KAFKA_AUTO_CREATE_TOPICS_ENABLE=false gating in
+  # scripts/utils.sh -- see connect/S390X_CERTIFICATION.md. No-op on
+  # non-s390x hosts. Takes the broker container name (default "broker";
+  # mdc-plaintext has two, "broker-europe" and "broker-us").
+  local broker_name="${1:-broker}"
+  if ! is_s390x
+  then
+    return 0
+  fi
+  if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${broker_name}$"
+  then
+    return 0
+  fi
+  log "🔧 s390x: re-enabling auto.create.topics.enable on ${broker_name} now that Schema Registry is up"
+  docker exec "$broker_name" kafka-configs --bootstrap-server "${broker_name}:9092" --entity-type brokers --entity-default --alter --add-config auto.create.topics.enable=true > /dev/null 2>&1 || true
 }
 
 function display_jmx_info() {

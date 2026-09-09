@@ -37,7 +37,12 @@ log "Creating AWS Lambda function"
 # https://docs.aws.amazon.com/lambda/latest/dg/python-package-create.html
 cd ../../connect/connect-aws-lambda-sink/my-add-function
 rm -f add.zip
-zip add.zip add.py
+# s390x agent image has no `zip`; fall back to Python's zipfile module.
+if command -v zip >/dev/null 2>&1; then
+  zip add.zip add.py
+else
+  python3 -m zipfile -c add.zip add.py
+fi
 cp add.zip /tmp/
 aws lambda create-function --function-name "$LAMBDA_FUNCTION_NAME" --zip-file fileb:///tmp/add.zip --handler add.lambda_handler --runtime python3.8 --role "$LAMBDA_ROLE" --tags "cflt_managed_by=user,cflt_managed_id=$USER"
 cd -

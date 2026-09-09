@@ -137,14 +137,25 @@ do
         
         if [[ ! $nb_messages =~ ^[0-9]+$ ]]
         then
-          echo $nb_messages | grep "does not exist" > /dev/null 2>&1
-          if [ $? == 0 ]
+          if is_s390x
           then
-            logwarn "❌ topic $topic does not exist !"
+            # source connectors: the target topic is created lazily on the
+            # first produced record and may not exist yet under QEMU
+            # emulation. Treat a missing/non-numeric count as 0 and keep
+            # polling until the overall --timeout below fires, instead of
+            # exiting immediately (which made --timeout meaningless for
+            # source-connector verifies on s390x).
+            nb_messages=0
           else
-            logwarn "❌ problem while getting number of messages: $nb_messages"
+            echo $nb_messages | grep "does not exist" > /dev/null 2>&1
+            if [ $? == 0 ]
+            then
+              logwarn "❌ topic $topic does not exist !"
+            else
+              logwarn "❌ problem while getting number of messages: $nb_messages"
+            fi
+            exit 1
           fi
-          exit 1
         fi
 
         if [ $nb_messages -ge $min_expected_messages ]

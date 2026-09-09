@@ -2,11 +2,12 @@
 services:
   solace:
     image: solace/solace-pubsub-standard:10.2
+    platform: linux/amd64
     hostname: solace
     container_name: solace
     user: root
     volumes:
-      - ../../connect/connect-solace-sink/show_queue_cmd:/usr/sw/jail/cliscripts/show_queue_cmd
+      - ../../connect/connect-solace-sink/show_queue_cmd:/usr/sw/jail/cliscripts/show_queue_cmd:z
     ports:
       - 8080:8080
       - 5550:5550
@@ -25,6 +26,6 @@ services:
     depends_on:
       - solace
     volumes:
-        - ../../connect/connect-solace-sink/sol-jms-10.6.4.jar:/usr/share/confluent-hub-components/confluentinc-kafka-connect-solace-sink/lib/sol-jms-10.6.4.jar
+        - ../../connect/connect-solace-sink/sol-jms-10.6.4.jar:/usr/share/confluent-hub-components/confluentinc-kafka-connect-solace-sink/lib/sol-jms-10.6.4.jar:z
     environment:
       CONNECT_PLUGIN_PATH: /usr/share/confluent-hub-components/confluentinc-kafka-connect-solace-sink

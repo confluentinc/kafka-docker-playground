@@ -9,7 +9,7 @@ services:
     hostname: simple-send
     container_name: simple-send
     volumes:
-      - ../../connect/connect-azure-service-bus-source/QueuesGettingStarted/target/queuesgettingstarted-1.0.0-jar-with-dependencies.jar:/queuesgettingstarted-1.0.0-jar-with-dependencies.jar:ro
+      - ../../connect/connect-azure-service-bus-source/QueuesGettingStarted/target/queuesgettingstarted-1.0.0-jar-with-dependencies.jar:/queuesgettingstarted-1.0.0-jar-with-dependencies.jar:ro,z
     command: ["sleep", "infinity"]
     depends_on:
       - broker

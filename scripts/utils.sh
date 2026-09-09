@@ -1,6 +1,27 @@
 DIR_UTILS="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
 source ${DIR_UTILS}/../scripts/cli/src/lib/utils_function.sh
 
+function confluent_hub_install_chown_suffix {
+  # Rootless Podman maps a container's UID 0 to the invoking host user, so
+  # files written by "docker run -u0" already land correctly owned -- no
+  # chown needed. Chowning to the literal host UID/GID from inside that same
+  # rootless container re-maps through /etc/subuid/subgid instead of writing
+  # it literally, handing the tree to an unrelated subuid-shifted owner the
+  # host user can then no longer read or write.
+  #
+  # The install above always runs via the literal "docker" binary, so what
+  # matters is whether THAT binary is actually Podman's docker-compat shim --
+  # not merely whether a separate "podman" binary happens to also be on
+  # PATH. Podman's shim reports its real identity in "docker --version"
+  # (e.g. "podman version 4.x.x"); real Docker Engine never does.
+  if docker --version 2>/dev/null | grep -qi podman && [ "$(docker info --format '{{.Host.Security.Rootless}}' 2>/dev/null)" = "true" ]
+  then
+    echo ""
+  else
+    echo " && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components"
+  fi
+}
+
 function cleanup-workaround-file {
   rm -f /tmp/without-cli-workaround > /dev/null 2>&1
 }
@@ -26,6 +47,40 @@ if [ -z "$FLINK_TAG" ]
 then
     # FLINK_TAG is not set, use default:
     export FLINK_TAG=latest
+fi
+
+# Architecture-aware defaults - deliberately unconditional (not nested inside
+# the "if [ -z $TAG ]" block below), since callers that pre-set TAG (e.g. CI
+# pipelines that pin CP_VERSION) still need these picked correctly for s390x.
+# CP_CONNECT_IMAGE is NOT included here: it has its own version-gated default
+# further down (both for the default-TAG path below and for the pre-5.3
+# TAG_BASE check further down), and setting it unconditionally here would
+# make those "if [ -z "$CP_CONNECT_IMAGE" ]" guards always false, silently
+# skipping the pre-5.3 cp-kafka-connect-base selection for callers who pin an
+# old TAG.
+if [ -z "$CP_C3_NEXTGEN_TAG" ]
+then
+  if is_s390x
+  then
+    export CP_C3_NEXTGEN_TAG=2.5.0
+  else
+    export CP_C3_NEXTGEN_TAG=2.0.0
+  fi
+fi
+
+if [ -z "$KAFKA_AUTO_CREATE_TOPICS_ENABLE" ]
+then
+  if is_s390x
+  then
+    # Confirmed via a clean A/B re-test on a real s390x VM: without this
+    # gate, Schema Registry crash-loops on a fresh environment. Disable
+    # auto-create for the startup window; re_enable_auto_create_topics()
+    # (called from environment/plaintext/start.sh once Schema Registry is
+    # healthy) turns it back on. See connect/S390X_CERTIFICATION.md.
+    export KAFKA_AUTO_CREATE_TOPICS_ENABLE=false
+  else
+    export KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+  fi
 fi
 
 # Setting up TAG environment variable
@@ -59,7 +114,12 @@ then
 
     if [ -z "$CP_CONNECT_IMAGE" ]
     then
-      export CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
+      if is_s390x
+      then
+        export CP_CONNECT_IMAGE=confluentinc/cp-server-connect
+      else
+        export CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
+      fi
     fi
 
     if [ -z "$CP_SCHEMA_REGISTRY_IMAGE" ]
@@ -273,7 +333,12 @@ else
         else
           if [ -z "$CP_CONNECT_IMAGE" ]
           then
-            export CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
+            if is_s390x
+            then
+              export CP_CONNECT_IMAGE=confluentinc/cp-server-connect
+            else
+              export CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
+            fi
           fi
         fi
     else
@@ -405,10 +470,11 @@ then
               sudo rm -rf ${DIR_UTILS}/../confluent-hub
             fi
             mkdir -p ${DIR_UTILS}/../confluent-hub
+            chmod 755 ${DIR_UTILS}/../confluent-hub
           fi
           log "🎱 Installing connector $owner/$name:$CONNECTOR_VERSION"
           set +e
-          docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt $owner/$name:$CONNECTOR_VERSION && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components" > /tmp/result.log 2>&1
+          docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components:z ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt $owner/$name:$CONNECTOR_VERSION$(confluent_hub_install_chown_suffix)" > /tmp/result.log 2>&1
           if [ $? != 0 ]
           then
               logerror "❌ failed to install connector $owner/$name:$CONNECTOR_VERSION"
@@ -531,6 +597,7 @@ else
           sudo rm -rf ${DIR_UTILS}/../confluent-hub
         fi
         mkdir -p ${DIR_UTILS}/../confluent-hub
+        chmod 755 ${DIR_UTILS}/../confluent-hub
 
         for connector_path in ${connector_paths//,/ }
         do
@@ -570,7 +637,7 @@ else
 
               log "🎱 Installing connector from zip $connector_zip_name"
               set +e
-              docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components  -v /tmp:/tmp ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt /tmp/${connector_zip_name} && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components" > /tmp/result.log 2>&1
+              docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components:z  -v /tmp:/tmp:z ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt /tmp/${connector_zip_name}$(confluent_hub_install_chown_suffix)" > /tmp/result.log 2>&1
               if [ $? != 0 ]
               then
                   logerror "❌ failed to install connector from zip $connector_zip_name"
@@ -613,7 +680,7 @@ else
 
             log "🎱 Installing connector $owner/$name:$version_to_get_from_hub"
             set +e
-            docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt $owner/$name:$version_to_get_from_hub && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components" > /tmp/result.log 2>&1
+            docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components:z ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt $owner/$name:$version_to_get_from_hub$(confluent_hub_install_chown_suffix)" > /tmp/result.log 2>&1
             if [ $? != 0 ]
             then
                 logerror "❌ failed to install connector $owner/$name:$version_to_get_from_hub"
