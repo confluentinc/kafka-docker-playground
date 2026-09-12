@@ -29,6 +29,15 @@ then
      exit 1
 fi
 
+# s390x: google/cloud-sdk publishes no s390x image, so gcloud/gsutil run emulated
+# under QEMU, whose AES-NI emulation corrupts TLS to *.googleapis.com
+# ([SSL: RECORD_LAYER_FAILURE] on gcloud auth). OPENSSL_ia32cap=0x0 disables the
+# emulated AES-NI path. Empty (no-op) off s390x.
+OPENSSL_IA32CAP_ENV=""
+if [ "$(uname -m)" = "s390x" ]; then
+  OPENSSL_IA32CAP_ENV="-e OPENSSL_ia32cap=0x0"
+fi
+
 cd ../../connect/connect-gcp-gcs-source
 GCP_KEYFILE="${PWD}/keyfile.json"
 if [ ! -f ${GCP_KEYFILE} ] && [ -z "$GCP_KEYFILE_CONTENT" ]
@@ -57,20 +66,20 @@ log "Doing gsutil authentication"
 set +e
 docker rm -f gcloud-config
 set -e
-docker run -i -v ${GCP_KEYFILE}:/tmp/keyfile.json --name gcloud-config google/cloud-sdk:latest gcloud auth activate-service-account --project ${GCP_PROJECT} --key-file /tmp/keyfile.json
+docker run -i -v ${GCP_KEYFILE}:/tmp/keyfile.json --name gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gcloud auth activate-service-account --project ${GCP_PROJECT} --key-file /tmp/keyfile.json
 
 log "Creating bucket name <$GCS_BUCKET_NAME>, if required"
 set +e
-docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gsutil mb -p $(cat ${GCP_KEYFILE} | jq -r .project_id) -l $GCS_BUCKET_REGION gs://$GCS_BUCKET_NAME
+docker run -i --volumes-from gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gsutil mb -p $(cat ${GCP_KEYFILE} | jq -r .project_id) -l $GCS_BUCKET_REGION gs://$GCS_BUCKET_NAME
 set -e
 
 log "Removing existing objects in GCS, if applicable"
 set +e
-docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gsutil -m rm -r gs://$GCS_BUCKET_NAME/*
+docker run -i --volumes-from gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gsutil -m rm -r gs://$GCS_BUCKET_NAME/*
 set -e
 
 log "Copy generalized.quickstart.json to bucket $GCS_BUCKET_NAME/quickstart"
-docker run -i -v ${PWD}:/tmp/ --volumes-from gcloud-config google/cloud-sdk:latest gsutil cp /tmp/generalized.quickstart.json gs://$GCS_BUCKET_NAME/quickstart/generalized.quickstart.json
+docker run -i -v ${PWD}:/tmp/ --volumes-from gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gsutil cp /tmp/generalized.quickstart.json gs://$GCS_BUCKET_NAME/quickstart/generalized.quickstart.json
 
 log "Creating Generalized GCS Source connector"
 playground connector create-or-update --connector gcs-source  << EOF
@@ -93,10 +102,22 @@ playground connector create-or-update --connector gcs-source  << EOF
 }
 EOF
 
-sleep 10
+# s390x: the source connector's first poll (gcs.poll.interval.ms=60000) + GCS
+# read + produce is slower than amd64; wait past the first poll so
+# quick-start-topic exists and has records before the verify. Otherwise the
+# message-count helper returns empty and the consume check errors out instantly.
+SETTLE_SLEEP=10
+if [ "$(uname -m)" = "s390x" ]; then SETTLE_SLEEP=90; fi
+sleep $SETTLE_SLEEP
+
+# s390x polls/reads GCS more slowly (connector is native s390x but the arch is
+# 2-5x slower per the certification guide); give the source connector more time
+# to deliver before the consume verify gives up. No behaviour change on amd64.
+CONSUME_TIMEOUT=60
+if [ "$(uname -m)" = "s390x" ]; then CONSUME_TIMEOUT=180; fi
 
 log "Verify messages are in topic quick-start-topic"
-playground topic consume --topic quick-start-topic --min-expected-messages 9 --timeout 60
+playground topic consume --topic quick-start-topic --min-expected-messages 9 --timeout $CONSUME_TIMEOUT
 
 # null    {"f1":"value1"}
 # null    {"f1":"value2"}
