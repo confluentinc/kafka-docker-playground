@@ -7,13 +7,11 @@ services:
       CONNECT_PLUGIN_PATH: /usr/share/confluent-hub-components/confluentinc-kafka-connect-azure-event-hubs
 
   simple-send:
-    build:
-      context: ../../connect/connect-azure-event-hubs-source/simple-send/
-      args:
-        CP_CONNECT_TAG: ${CP_CONNECT_TAG}
-        CP_CONNECT_IMAGE: ${CP_CONNECT_IMAGE}
-        KAFKA_CLIENT_TAG: ${KAFKA_CLIENT_TAG}
+    image: eclipse-temurin:11-jre
     hostname: simple-send
     container_name: simple-send
+    volumes:
+      - ../../connect/connect-azure-event-hubs-source/simple-send/target/simplesend-1.0.0-jar-with-dependencies.jar:/simplesend-1.0.0-jar-with-dependencies.jar:ro,z
+    command: ["sleep", "infinity"]
     depends_on:
       - broker
