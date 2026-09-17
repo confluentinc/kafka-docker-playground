@@ -44,3 +44,10 @@ log "💫 Recreate container(s)"
 bash /tmp/playground-command
 
 wait_container_ready
+if [ "$environment" == "mdc-plaintext" ]
+then
+  re_enable_auto_create_topics broker-europe
+  re_enable_auto_create_topics broker-us
+else
+  re_enable_auto_create_topics
+fi

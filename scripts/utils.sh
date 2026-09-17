@@ -1,8 +1,638 @@
 DIR_UTILS="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
 source ${DIR_UTILS}/../scripts/cli/src/lib/utils_function.sh
 
+function confluent_hub_install_chown_suffix {
+  # Rootless Podman maps a container's UID 0 to the invoking host user, so
+  # files written by "docker run -u0" already land correctly owned -- no
+  # chown needed. Chowning to the literal host UID/GID from inside that same
+  # rootless container re-maps through /etc/subuid/subgid instead of writing
+  # it literally, handing the tree to an unrelated subuid-shifted owner the
+  # host user can then no longer read or write.
+  #
+  # The install above always runs via the literal "docker" binary, so what
+  # matters is whether THAT binary is actually Podman's docker-compat shim --
+  # not merely whether a separate "podman" binary happens to also be on
+  # PATH. Podman's shim reports its real identity in "docker --version"
+  # (e.g. "podman version 4.x.x"); real Docker Engine never does.
+  if docker --version 2>/dev/null | grep -qi podman && [ "$(docker info --format '{{.Host.Security.Rootless}}' 2>/dev/null)" = "true" ]
+  then
+    echo ""
+  else
+    echo " && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components"
+  fi
+}
+
 function cleanup-workaround-file {
   rm -f /tmp/without-cli-workaround > /dev/null 2>&1
+}
+
+# True when the Connect image under test is CP 8.x or newer. Upstream defines this in
+# scripts/cli/src/lib/utils_function.sh; on this branch it lives here so the Salesforce
+# tests below can use it without touching the CLI library.
+function connect_cp_version_greater_than_8 () {
+  if [ ! -z "$CP_CONNECT_TAG" ] && version_gt $CP_CONNECT_TAG "7.9.99"
+  then
+    return 0
+  elif [ ! -z "$TAG_BASE" ] && version_gt $TAG_BASE "7.9.99"
+  then
+    return 0
+  else
+    return 1
+  fi
+}
+
+# Errors that mean "the external system briefly misbehaved", not "this config is wrong".
+# Kept deliberately narrow: anything not listed here fails on the first attempt, so a real
+# misconfiguration or a genuine connector bug is never retried into a green run.
+#
+# INVALID_SESSION_ID is included: Salesforce reuses one session across identical
+# username-password logins by the same user, so a concurrent logout elsewhere can
+# invalidate the session validation is holding. Retrying re-authenticates.
+SALESFORCE_TRANSIENT_CREATE_ERRORS="\
+Exception encountered while calling salesforce|\
+Read timed out|Connection reset|Connection refused|\
+502 Bad Gateway|503 Service Unavailable|504 Gateway|\
+SERVER_UNAVAILABLE|Server Unavailable|UNABLE_TO_LOCK_ROW|\
+INVALID_SESSION_ID"
+
+# The same idea for the sfdx CLI steps (login, record create, Apex). These run before and
+# around the connector, and a blip in any of them aborts the test just as hard.
+#
+# "Could not retrieve the username after successful auth code exchange" is observed in CI:
+# sfpowerkit:auth:login failed with it, and the identical login with the identical
+# credentials succeeded 15 seconds later in the same test's teardown - so it is transient.
+SALESFORCE_TRANSIENT_SFDX_ERRORS="\
+Could not retrieve the username after successful auth code exchange|\
+Session expired or invalid|INVALID_SESSION_ID|Bad_OAuth_Token|\
+Read timed out|Connection reset|Connection refused|ETIMEDOUT|ECONNRESET|EAI_AGAIN|\
+socket hang up|502 Bad Gateway|503 Service Unavailable|504 Gateway|\
+SERVER_UNAVAILABLE|Server Unavailable|UNABLE_TO_LOCK_ROW"
+
+# Errors that must NEVER be retried, checked before the transient lists above.
+#
+# REQUEST_LIMIT_EXCEEDED is the org's 24h API request cap. Retrying spends more of the
+# very budget that is exhausted, and when it hits, every test fails at once - which looks
+# exactly like a session bug unless it is called out explicitly.
+#
+# DUPLICATES_DETECTED and the *_REQUIRED_FIELD / INVALID_FIELD family are deterministic:
+# the same request will fail the same way however many times it is sent.
+SALESFORCE_FATAL_ERRORS="\
+REQUEST_LIMIT_EXCEEDED|TotalRequests Limit exceeded|\
+DUPLICATES_DETECTED|REQUIRED_FIELD_MISSING|INVALID_FIELD|\
+INSUFFICIENT_ACCESS|INVALID_LOGIN"
+
+# Retries consumed so far by this test. Reset per test process, since each test runs in
+# its own shell - so the budget below is genuinely per test, not per connector.
+SALESFORCE_CREATE_RETRIES_USED=0
+
+# Create a connector, retrying only when validation failed for a transient reason.
+#
+# Connector validation calls out to Salesforce (token endpoint, /services/data/,
+# describeSObject). A single blip there aborts the whole test even though nothing is
+# wrong with the connector or the test. Observed in CI: validation got HTTP 404 from
+# /services/data/ one second after a successful JWT auth, twice, then the identical
+# commit passed - so the failure is intermittent and upstream.
+#
+# Usage is identical to `playground connector create-or-update --connector X << EOF`:
+#
+#   salesforce_create_connector_with_retry salesforce-cdc-source << EOF
+#   { ... }
+#   EOF
+#
+# The retry budget is per TEST, not per connector: SALESFORCE_CREATE_MAX_RETRIES retries
+# are shared across every connector a test creates, so a test that creates three
+# connectors cannot spend three retries on each of them. First attempts are never
+# counted against the budget.
+#
+# The body is read from stdin once and replayed on each attempt.
+function salesforce_create_connector_with_retry() {
+  local connector="$1"
+  local max_retries="${SALESFORCE_CREATE_MAX_RETRIES:-3}"
+  local delay="${SALESFORCE_CREATE_RETRY_DELAY:-15}"
+  local body attempt=1 rc out had_errexit=0
+
+  # Remember whether the caller had errexit on, so it can be restored exactly. Setting
+  # it unconditionally would turn it on for callers that deliberately had it off - the
+  # cleanup traps run under set +e.
+  case $- in
+    *e*) had_errexit=1 ;;
+  esac
+
+  body="$(cat)"
+
+  while true
+  do
+    set +e
+    out="$(printf '%s\n' "$body" | playground connector create-or-update --connector "$connector" 2>&1)"
+    rc=$?
+    if [ $had_errexit -eq 1 ]
+    then
+      set -e
+    fi
+    echo "$out"
+
+    if [ $rc -eq 0 ]
+    then
+      if [ $attempt -gt 1 ]
+      then
+        log "✅ $connector created on attempt $attempt"
+      fi
+      return 0
+    fi
+
+    if echo "$out" | grep -qE "$SALESFORCE_FATAL_ERRORS"
+    then
+      logerror "❌ $connector creation hit a limit or a deterministic rejection that retrying cannot fix, not retrying"
+      return $rc
+    fi
+
+    if ! echo "$out" | grep -qE "$SALESFORCE_TRANSIENT_CREATE_ERRORS"
+    then
+      logerror "❌ $connector creation failed for a non-transient reason, not retrying"
+      return $rc
+    fi
+
+    if [ "$SALESFORCE_CREATE_RETRIES_USED" -ge "$max_retries" ]
+    then
+      logerror "❌ $connector hit a transient error but this test has already used its $max_retries retry(ies)"
+      return $rc
+    fi
+
+    SALESFORCE_CREATE_RETRIES_USED=$((SALESFORCE_CREATE_RETRIES_USED + 1))
+    logwarn "⚠️ transient error creating $connector, retrying in ${delay}s (retry $SALESFORCE_CREATE_RETRIES_USED/$max_retries for this test)"
+    sleep "$delay"
+    attempt=$((attempt + 1))
+  done
+}
+
+# Run an sfdx command in the sfdx-cli container, retrying only on a transient failure.
+#
+# Every sfdx step in these tests runs under `set -e`, so a single blip in a login, a record
+# create or an Apex run aborts the test even though nothing is wrong with the connector.
+# Only connector creation was retried before this; the steps around it were not.
+#
+# Usage mirrors the call it replaces:
+#
+#   salesforce_sfdx_with_retry "sfdx sfpowerkit:auth:login -u \"$USER\" ..."
+#
+# and for the commands that pipe Apex in on stdin:
+#
+#   salesforce_sfdx_with_retry --stdin "sfdx apex run --target-org \"$USER\"" << EOF
+#   Database.delete(...);
+#   EOF
+#
+# The retry budget is shared with salesforce_create_connector_with_retry, so
+# SALESFORCE_CREATE_MAX_RETRIES is the ceiling for the whole test, not per step.
+function salesforce_sfdx_with_retry() {
+  local use_stdin=0
+
+  if [ "$1" == "--stdin" ]
+  then
+    use_stdin=1
+    shift
+  fi
+
+  local sfdx_command="$1"
+  local label="${2:-$(echo "$sfdx_command" | awk '{print $1" "$2}')}"
+  local max_retries="${SALESFORCE_CREATE_MAX_RETRIES:-3}"
+  local delay="${SALESFORCE_CREATE_RETRY_DELAY:-15}"
+  local body="" attempt=1 rc out had_errexit=0
+
+  # As in salesforce_create_connector_with_retry: restore the caller's errexit exactly,
+  # because the cleanup traps deliberately run with it off.
+  case $- in
+    *e*) had_errexit=1 ;;
+  esac
+
+  if [ $use_stdin -eq 1 ]
+  then
+    body="$(cat)"
+  fi
+
+  while true
+  do
+    set +e
+    if [ $use_stdin -eq 1 ]
+    then
+      out="$(printf '%s\n' "$body" | playground container exec --container sfdx-cli --command "$sfdx_command" --shell sh 2>&1)"
+    else
+      out="$(playground container exec --container sfdx-cli --command "$sfdx_command" --shell sh 2>&1)"
+    fi
+    rc=$?
+    if [ $had_errexit -eq 1 ]
+    then
+      set -e
+    fi
+    echo "$out"
+
+    if [ $rc -eq 0 ]
+    then
+      if [ $attempt -gt 1 ]
+      then
+        log "✅ $label succeeded on attempt $attempt"
+      fi
+      return 0
+    fi
+
+    if echo "$out" | grep -qE "$SALESFORCE_FATAL_ERRORS"
+    then
+      logerror "❌ $label hit a limit or a deterministic rejection that retrying cannot fix, not retrying"
+      return $rc
+    fi
+
+    if ! echo "$out" | grep -qE "$SALESFORCE_TRANSIENT_SFDX_ERRORS"
+    then
+      logerror "❌ $label failed for a non-transient reason, not retrying"
+      return $rc
+    fi
+
+    if [ "$SALESFORCE_CREATE_RETRIES_USED" -ge "$max_retries" ]
+    then
+      logerror "❌ $label hit a transient error but this test has already used its $max_retries retry(ies)"
+      return $rc
+    fi
+
+    SALESFORCE_CREATE_RETRIES_USED=$((SALESFORCE_CREATE_RETRIES_USED + 1))
+    logwarn "⚠️ transient error during $label, retrying in ${delay}s (retry $SALESFORCE_CREATE_RETRIES_USED/$max_retries for this test)"
+
+    # A dead sfdx session cannot be fixed by re-running the command, so re-authenticate the
+    # org this command targets before retrying. Observed in CI on a PushTopic test: sfdx
+    # logged in successfully, then the very next `apex run` failed "Session expired or
+    # invalid" 4 seconds later, because an earlier username-password connector's validation
+    # logout() had killed the session Salesforce reuses for identical logins by the same user.
+    # Retrying alone would have burned the whole budget and still failed.
+    # Re-authenticate before retrying: re-running a command cannot revive a dead session.
+    # This rescues setup steps that run before any connector exists, which the EXIT trap
+    # cannot help with - observed in CI on a PushTopic test whose `apex run -f` failed here.
+    if echo "$out" | grep -qE "Session expired or invalid|INVALID_SESSION_ID|Bad_OAuth_Token"
+    then
+      case "$sfdx_command" in
+        *auth:login*)
+          : # the command being retried IS a login
+          ;;
+        *"$SALESFORCE_USERNAME_ACCOUNT2"*)
+          salesforce_sfdx_relogin "$SALESFORCE_USERNAME_ACCOUNT2" "$SALESFORCE_PASSWORD_ACCOUNT2" \
+            "$SALESFORCE_SECURITY_TOKEN_ACCOUNT2" "$SALESFORCE_INSTANCE_ACCOUNT2" || true
+          ;;
+        *)
+          salesforce_sfdx_relogin "$SALESFORCE_USERNAME" "$SALESFORCE_PASSWORD" \
+            "$SALESFORCE_SECURITY_TOKEN" "$SALESFORCE_INSTANCE" || true
+          ;;
+      esac
+    fi
+
+    sleep "$delay"
+    attempt=$((attempt + 1))
+  done
+}
+
+# Re-authenticate the sfdx CLI for one org, one attempt, best effort.
+#
+# Needed because a connector on the username-password SOAP grant ends its session with a
+# SOAP logout() during validation, and Salesforce reuses one session across identical logins
+# by the same user - so it also kills the session the sfdx CLI is holding. Re-running a
+# command cannot revive a dead session; only a fresh login can.
+#
+# Deliberately not routed through salesforce_sfdx_with_retry: that would consume the caller's
+# retry budget and sleep twice per attempt.
+function salesforce_sfdx_relogin() {
+  local u="$1" p="$2" t="$3" i="${4:-https://login.salesforce.com}"
+
+  if [ -z "$u" ] || [ -z "$p" ] || [ -z "$t" ]
+  then
+    logwarn "⚠️ cannot re-authenticate sfdx, credentials not set"
+    return 1
+  fi
+
+  # < /dev/null because `playground container exec` reads stdin, and this can be called from
+  # a cleanup trap or between piped commands, where it would otherwise swallow input meant
+  # for something else.
+  log "🔑 Re-authenticating sfdx for $u"
+  playground container exec --container sfdx-cli \
+    --command "sfdx sfpowerkit:auth:login -u \"$u\" -p \"$p\" -r \"$i\" -s \"$t\"" --shell sh < /dev/null
+}
+
+# Delete the records a test created, in one org. Best effort: warns and never changes the
+# test's exit status, so a cleanup problem cannot mask or invent a test failure.
+#
+# Each call resets the retry budget, so one org's delete cannot starve another's.
+#
+#   salesforce_cleanup_records "$SALESFORCE_USERNAME" "$SALESFORCE_PASSWORD" \
+#     "$SALESFORCE_SECURITY_TOKEN" "$SALESFORCE_INSTANCE" \
+#     "Lead:FirstName='$LEAD_FIRSTNAME' AND LastName='$LEAD_LASTNAME'" \
+#     "PushTopic:Name='$PUSH_TOPICS_NAME'"
+# Wait for the connector's task to reach RUNNING, restarting it if it died with
+# INVALID_SESSION_ID.
+#
+# The Bulk API connectors authenticate with the username-password SOAP grant. Connector
+# validation opens its own PartnerConnection and ends it with a SOAP logout(), and
+# Salesforce reuses one session across identical logins by the same user - so validation
+# can tear down the session the task is holding. The task then fails its very first
+# describeSObject with INVALID_SESSION_ID ("Session not found, missing session hash")
+# within seconds of starting, and Connect does not retry a task that threw from start().
+#
+# Restarting the task re-authenticates without re-running validation, which is also the
+# remedy Salesforce documents for a session invalidated by a concurrent logout. Only
+# INVALID_SESSION_ID is retried: any other task failure fails the test immediately, so a
+# genuine regression is still caught.
+function restart_task_on_invalid_session() {
+  local connector="$1"
+  local max_restarts="${2:-2}"
+  local restarts=0
+  local checks=0
+  local task_status state trace
+
+  while [ "$checks" -lt 12 ]; do
+    sleep 10
+    checks=$((checks + 1))
+    task_status=$(curl -s "http://localhost:8083/connectors/${connector}/status")
+    state=$(echo "$task_status" | jq -r '.tasks[0].state // "MISSING"')
+
+    case "$state" in
+      RUNNING)
+        if [ "$restarts" -gt 0 ]; then
+          log "✅ $connector task reached RUNNING after $restarts restart(s)"
+        fi
+        return 0
+        ;;
+      FAILED)
+        trace=$(echo "$task_status" | jq -r '.tasks[0].trace // ""')
+        if ! echo "$trace" | grep -q "INVALID_SESSION_ID"; then
+          logerror "$connector task FAILED, and not with INVALID_SESSION_ID:"
+          echo "$trace" | head -20
+          return 1
+        fi
+        if [ "$restarts" -ge "$max_restarts" ]; then
+          logerror "$connector still hitting INVALID_SESSION_ID after $restarts restart(s)"
+          return 1
+        fi
+        restarts=$((restarts + 1))
+        logwarn "⚠️ $connector hit INVALID_SESSION_ID, restarting task ($restarts/$max_restarts)"
+        curl -s -X POST "http://localhost:8083/connectors/${connector}/tasks/0/restart" > /dev/null
+        ;;
+      *)
+        # UNASSIGNED or not yet reported while the task is still coming up.
+        ;;
+    esac
+  done
+
+  logerror "$connector task never reached RUNNING (last state: $state)"
+  return 1
+}
+
+# Adopt per-test Salesforce credentials when they exist, otherwise keep the shared ones.
+#
+# The seven gated tests share one Salesforce org, one user and one connected app. That forces
+# them to run sequentially: the Bulk API source reads every Lead in the object, so a
+# concurrent test's record gets ingested and copied into the second org, and every JWT token
+# comes from the same connected app, which caps how many can be live at once.
+#
+# Giving a test its own credentials removes both constraints. Any subset can be provided -
+# each variable falls back independently, so a suffix with no credentials configured behaves
+# exactly as before and nothing needs to change for GitHub Actions or any other consumer.
+#
+#   salesforce_use_test_creds CDC              # primary org only
+#   salesforce_use_test_creds SOBJECT ACCOUNT2 # also the second org
+#
+# For suffix CDC this prefers, when set and non-empty:
+#   SALESFORCE_USERNAME_CDC, SALESFORCE_PASSWORD_CDC, SALESFORCE_SECURITY_TOKEN_CDC,
+#   SALESFORCE_INSTANCE_CDC, SALESFORCE_CONSUMER_KEY_WITH_JWT_CDC
+# and with ACCOUNT2, the same names suffixed _CDC_ACCOUNT2 for the second org.
+#
+# Indirect expansion is used deliberately here: this resolves five names across two orgs, so
+# spelling each out would be ten near-identical blocks.
+function salesforce_use_test_creds() {
+  local suffix="$1"
+  local also_account2="${2:-}"
+  local bases="USERNAME PASSWORD SECURITY_TOKEN INSTANCE CONSUMER_KEY_WITH_JWT"
+  local base="" shared="" specific="" adopted=0
+
+  if [ -z "$suffix" ]
+  then
+    return 0
+  fi
+
+  for base in $bases
+  do
+    shared="SALESFORCE_${base}"
+    specific="SALESFORCE_${base}_${suffix}"
+    if [ -n "${!specific:-}" ]
+    then
+      export "$shared=${!specific}"
+      adopted=$((adopted + 1))
+    fi
+
+    if [ -n "$also_account2" ]
+    then
+      shared="SALESFORCE_${base}_ACCOUNT2"
+      specific="SALESFORCE_${base}_${suffix}_ACCOUNT2"
+      if [ -n "${!specific:-}" ]
+      then
+        export "$shared=${!specific}"
+        adopted=$((adopted + 1))
+      fi
+    fi
+  done
+
+  if [ "$adopted" -gt 0 ]
+  then
+    log "🔑 using $suffix-specific Salesforce credentials ($adopted of the shared values overridden)"
+  else
+    log "🔑 no $suffix-specific Salesforce credentials set, using the shared account"
+  fi
+}
+
+function salesforce_cleanup_records() {
+  local u="$1" p="$2" t="$3" i="$4"
+  shift 4
+  local apex="" spec=""
+
+  for spec in "$@"
+  do
+    apex="${apex}Database.delete([SELECT Id FROM ${spec%%:*} WHERE ${spec#*:}], false);
+"
+  done
+
+  SALESFORCE_CREATE_RETRIES_USED=0
+  salesforce_sfdx_relogin "$u" "$p" "$t" "$i"
+
+  if ! printf '%s' "$apex" | salesforce_sfdx_with_retry --stdin "sfdx apex run --target-org \"$u\""
+  then
+    logwarn "⚠️ cleanup in org $u did not complete - records may be left behind"
+  fi
+}
+
+# Assert a topic is empty, and fail the test if it is not.
+#
+# `playground topic consume --min-expected-messages 0` does NOT assert anything: with 0 the
+# CLI skips its count check entirely and only warns when the topic is missing. The sink
+# tests used it for error-responses, so a partial failure (one good record plus N errored
+# ones) satisfied "success-responses >= 1" and the errors were never looked at.
+function salesforce_assert_topic_empty() {
+  local topic="$1"
+  local nb_messages=""
+
+  local out="" rc=0 had_errexit=0
+
+  # Callers run under `set -e`, so the count must be read with errexit off: otherwise a
+  # non-zero exit from the CLI kills the test script on this very line and none of the
+  # diagnostics below ever run.
+  case $- in
+    *e*) had_errexit=1 ;;
+  esac
+
+  # Decide existence directly instead of inferring it from a log line. Matching "does not
+  # exist" in the output was unsound in both directions: an empty or failed topic list is
+  # byte-identical to a genuinely absent topic (false pass), and the message is produced by
+  # logwarn, which returns early under PG_LOG_LEVEL=INFO (false failure).
+  # The list and its status must be captured separately. Piping straight into grep yields
+  # grep's status, which makes a failed or empty topic list indistinguishable from a
+  # genuinely absent topic - the silent pass this helper exists to prevent. get-topic-list
+  # prints nothing and still exits 0 when it cannot resolve the broker container, so an
+  # empty list is treated as "could not determine", not "absent".
+  local topics="" list_rc=0
+  set +e
+  topics="$(playground get-topic-list 2>&1)"
+  list_rc=$?
+  if [ $had_errexit -eq 1 ]
+  then
+    set -e
+  fi
+
+  if [ $list_rc -ne 0 ] || [ -z "$topics" ]
+  then
+    logerror "❌ could not list topics (rc=$list_rc), refusing to assume $topic is empty"
+    printf '%s\n' "$topics"
+    return 1
+  fi
+
+  if ! printf '%s\n' "$topics" | grep -qFx "$topic"
+  then
+    log "✅ topic $topic contains no records (topic does not exist)"
+    return 0
+  fi
+
+  set +e
+  out="$(playground topic get-number-records -t "$topic" 2>&1)"
+  rc=$?
+  if [ $had_errexit -eq 1 ]
+  then
+    set -e
+  fi
+  # Take the last purely-numeric line: stderr is merged in (deliberately, so it can be
+  # shown on failure) and a warning flushed after the count would otherwise be read as it.
+  nb_messages="$(printf '%s\n' "$out" | grep -oE '^[0-9]+$' | tail -1)"
+
+  # The topic exists, so the count must be a number. Anything else means it could not be
+  # determined - a failed docker exec, an unknown CP version, an empty awk sum - and must
+  # fail rather than silently pass.
+  if [ $rc -ne 0 ] || [ -z "$nb_messages" ]
+  then
+    logerror "❌ could not determine the record count for $topic (rc=$rc), refusing to assume it is empty"
+    printf '%s\n' "$out"
+    return 1
+  fi
+
+  if [ "$nb_messages" -gt 0 ]
+  then
+    logerror "❌ topic $topic should be empty but contains $nb_messages message(s)"
+    playground topic consume --topic "$topic" --max-messages -1 || true
+    return 1
+  fi
+
+  log "✅ topic $topic is empty, as expected"
+}
+
+# Version of the connector actually under test, or "" when it cannot be determined.
+#
+# --connector-tag runs set CONNECTOR_TAG, but --connector-zip and --connector-jar runs do
+# NOT: utils.sh only assigns CONNECTOR_TAG on the path where neither is set. CI gates build
+# the connector from the PR branch and pass --connector-zip, so CONNECTOR_TAG is empty there
+# and any guard written as `[ ! -z "$CONNECTOR_TAG" ] && ...` silently never fires. The
+# version is still available - in the artifact filename, e.g.
+# confluentinc-kafka-connect-salesforce-bulk-api-3.0.15-SNAPSHOT.zip
+function salesforce_connector_version() {
+  local artifact=""
+
+  if [ ! -z "$CONNECTOR_TAG" ]
+  then
+    echo "$CONNECTOR_TAG"
+    return 0
+  fi
+
+  if [ ! -z "$CONNECTOR_ZIP" ]
+  then
+    artifact="$(basename "$CONNECTOR_ZIP")"
+  elif [ ! -z "$CONNECTOR_JAR" ]
+  then
+    artifact="$(basename "$CONNECTOR_JAR")"
+  else
+    return 0
+  fi
+
+  # Trailing -SNAPSHOT is dropped so the result compares cleanly with a plain x.y.z bound.
+  # The FIRST x.y.z triple is the Maven version; a greedy match would take the last, so
+  # ...-3.0.15-SNAPSHOT-cp-8.0.0.zip would resolve to 8.0.0. Any qualifier after it
+  # (-SNAPSHOT, -rc1, a timestamped snapshot, -jar-with-dependencies) is left to version_gt,
+  # which strips it.
+  echo "$artifact" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+}
+
+# Whether the given Bulk API connector version supports the JWT_BEARER grant.
+#
+# JWT_BEARER was backported onto two lines independently: 3.0.15 on 3.0.x and 3.1.9 on 3.1.x.
+# A blanket ">= 3.0.0" check is wrong: 3.1.0-3.1.8 are ">= 3.0.0" in a plain version sort but
+# predate the 3.1.x backport, so that check would wrongly select JWT for them and fail with
+# invalid_client. This instead checks the two ranges that actually have it:
+#   [3.0.15, 3.1.0)  - the 3.0.x line from where it landed, up to the next line
+#   (3.1.8, ∞)       - the 3.1.x line from where it landed, and every line after (3.2.x, ...),
+#                      which all descend from master after the merge
+# An empty or undeterminable version returns false, so the caller falls back to
+# username-password, which every version supports.
+function salesforce_bulkapi_supports_jwt() {
+  local version="$1"
+
+  if [ -z "$version" ]
+  then
+    return 1
+  fi
+
+  if ! version_gt "3.0.15" "$version" && version_gt "3.1.0" "$version"
+  then
+    return 0
+  fi
+
+  version_gt "$version" "3.1.8"
+}
+
+function salesforce_ensure_jwt_keystore() {
+  local target_dir="${1:-$PWD}"
+  local keystore_path="$target_dir/salesforce-confluent.keystore.jks"
+
+  if [ ! -f "$keystore_path" ]
+  then
+    # If a previous aborted run left a directory at this path, aws s3 cp will fail
+    # with "Is a directory". Remove it so the download can proceed.
+    rm -rf "$keystore_path"
+    # Keep stdout clean for command substitution callers; logs still go to stderr.
+    (cd "$target_dir" && get_3rdparty_file "salesforce-confluent.keystore.jks") >&2
+  fi
+
+  if [ ! -f "$keystore_path" ]
+  then
+    logerror "❌ $keystore_path is missing. Check README !"
+    exit 1
+  fi
+
+  echo "$keystore_path"
+}
+
+function salesforce_get_jwt_keystore_base64() {
+  local target_dir="${1:-$PWD}"
+  local keystore_path=""
+
+  keystore_path=$(salesforce_ensure_jwt_keystore "$target_dir")
+  base64 < "$keystore_path" | tr -d '\n'
 }
 
 if [ ! -f /tmp/playground-run-command-used ]
@@ -26,6 +656,40 @@ if [ -z "$FLINK_TAG" ]
 then
     # FLINK_TAG is not set, use default:
     export FLINK_TAG=latest
+fi
+
+# Architecture-aware defaults - deliberately unconditional (not nested inside
+# the "if [ -z $TAG ]" block below), since callers that pre-set TAG (e.g. CI
+# pipelines that pin CP_VERSION) still need these picked correctly for s390x.
+# CP_CONNECT_IMAGE is NOT included here: it has its own version-gated default
+# further down (both for the default-TAG path below and for the pre-5.3
+# TAG_BASE check further down), and setting it unconditionally here would
+# make those "if [ -z "$CP_CONNECT_IMAGE" ]" guards always false, silently
+# skipping the pre-5.3 cp-kafka-connect-base selection for callers who pin an
+# old TAG.
+if [ -z "$CP_C3_NEXTGEN_TAG" ]
+then
+  if is_s390x
+  then
+    export CP_C3_NEXTGEN_TAG=2.5.0
+  else
+    export CP_C3_NEXTGEN_TAG=2.0.0
+  fi
+fi
+
+if [ -z "$KAFKA_AUTO_CREATE_TOPICS_ENABLE" ]
+then
+  if is_s390x
+  then
+    # Confirmed via a clean A/B re-test on a real s390x VM: without this
+    # gate, Schema Registry crash-loops on a fresh environment. Disable
+    # auto-create for the startup window; re_enable_auto_create_topics()
+    # (called from environment/plaintext/start.sh once Schema Registry is
+    # healthy) turns it back on. See connect/S390X_CERTIFICATION.md.
+    export KAFKA_AUTO_CREATE_TOPICS_ENABLE=false
+  else
+    export KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+  fi
 fi
 
 # Setting up TAG environment variable
@@ -59,7 +723,12 @@ then
 
     if [ -z "$CP_CONNECT_IMAGE" ]
     then
-      export CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
+      if is_s390x
+      then
+        export CP_CONNECT_IMAGE=confluentinc/cp-server-connect
+      else
+        export CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
+      fi
     fi
 
     if [ -z "$CP_SCHEMA_REGISTRY_IMAGE" ]
@@ -273,7 +942,12 @@ else
         else
           if [ -z "$CP_CONNECT_IMAGE" ]
           then
-            export CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
+            if is_s390x
+            then
+              export CP_CONNECT_IMAGE=confluentinc/cp-server-connect
+            else
+              export CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
+            fi
           fi
         fi
     else
@@ -405,10 +1079,11 @@ then
               sudo rm -rf ${DIR_UTILS}/../confluent-hub
             fi
             mkdir -p ${DIR_UTILS}/../confluent-hub
+            chmod 755 ${DIR_UTILS}/../confluent-hub
           fi
           log "🎱 Installing connector $owner/$name:$CONNECTOR_VERSION"
           set +e
-          docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt $owner/$name:$CONNECTOR_VERSION && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components" > /tmp/result.log 2>&1
+          docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components:z ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt $owner/$name:$CONNECTOR_VERSION$(confluent_hub_install_chown_suffix)" > /tmp/result.log 2>&1
           if [ $? != 0 ]
           then
               logerror "❌ failed to install connector $owner/$name:$CONNECTOR_VERSION"
@@ -531,6 +1206,7 @@ else
           sudo rm -rf ${DIR_UTILS}/../confluent-hub
         fi
         mkdir -p ${DIR_UTILS}/../confluent-hub
+        chmod 755 ${DIR_UTILS}/../confluent-hub
 
         for connector_path in ${connector_paths//,/ }
         do
@@ -570,7 +1246,7 @@ else
 
               log "🎱 Installing connector from zip $connector_zip_name"
               set +e
-              docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components  -v /tmp:/tmp ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt /tmp/${connector_zip_name} && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components" > /tmp/result.log 2>&1
+              docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components:z  -v /tmp:/tmp:z ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt /tmp/${connector_zip_name}$(confluent_hub_install_chown_suffix)" > /tmp/result.log 2>&1
               if [ $? != 0 ]
               then
                   logerror "❌ failed to install connector from zip $connector_zip_name"
@@ -613,7 +1289,7 @@ else
 
             log "🎱 Installing connector $owner/$name:$version_to_get_from_hub"
             set +e
-            docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt $owner/$name:$version_to_get_from_hub && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components" > /tmp/result.log 2>&1
+            docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components:z ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt $owner/$name:$version_to_get_from_hub$(confluent_hub_install_chown_suffix)" > /tmp/result.log 2>&1
             if [ $? != 0 ]
             then
                 logerror "❌ failed to install connector $owner/$name:$version_to_get_from_hub"
