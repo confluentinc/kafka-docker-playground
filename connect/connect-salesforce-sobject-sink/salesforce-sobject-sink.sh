@@ -4,26 +4,29 @@ set -e
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
 source ${DIR}/../../scripts/utils.sh
 
-if [ ! -z "$TAG_BASE" ] && version_gt $TAG_BASE "7.9.99" && [ ! -z "$CONNECTOR_TAG" ] && ! version_gt $CONNECTOR_TAG "2.0.28"
+if connect_cp_version_greater_than_8 && [ ! -z "$CONNECTOR_TAG" ] && ! version_gt $CONNECTOR_TAG "2.0.28"
 then
      logwarn "minimal supported connector version is 2.0.29 for CP 8.0"
-     logwarn "see https://docs.confluent.io/platform/current/connect/supported-connector-version-8.0.html#supported-connector-versions-in-cp-8-0"
+     logwarn "see https://docs.confluent.io/platform/8.0/connect/supported-connector-version.html#"
      exit 111
 fi
 
+# Prefer credentials dedicated to this test when they are configured, so it can run
+# concurrently with the others; falls back to the shared account otherwise.
+salesforce_use_test_creds KDP_SOBJECT ACCOUNT2
+
 SALESFORCE_USERNAME=${SALESFORCE_USERNAME:-$1}
 SALESFORCE_PASSWORD=${SALESFORCE_PASSWORD:-$2}
-SALESFORCE_CONSUMER_KEY=${SALESFORCE_CONSUMER_KEY:-$3}
-SALESFORCE_CONSUMER_PASSWORD=${SALESFORCE_CONSUMER_PASSWORD:-$4}
-SALESFORCE_SECURITY_TOKEN=${SALESFORCE_SECURITY_TOKEN:-$5}
+SALESFORCE_CONSUMER_KEY_WITH_JWT=${SALESFORCE_CONSUMER_KEY_WITH_JWT:-$3}
+SALESFORCE_SECURITY_TOKEN=${SALESFORCE_SECURITY_TOKEN:-$4}
 SALESFORCE_INSTANCE=${SALESFORCE_INSTANCE:-"https://login.salesforce.com"}
 
+
 # second account (for SObject sink)
-SALESFORCE_USERNAME_ACCOUNT2=${SALESFORCE_USERNAME_ACCOUNT2:-$6}
-SALESFORCE_PASSWORD_ACCOUNT2=${SALESFORCE_PASSWORD_ACCOUNT2:-$7}
-SALESFORCE_SECURITY_TOKEN_ACCOUNT2=${SALESFORCE_SECURITY_TOKEN_ACCOUNT2:-$8}
-SALESFORCE_CONSUMER_KEY_ACCOUNT2=${SALESFORCE_CONSUMER_KEY_ACCOUNT2:-$9}
-SALESFORCE_CONSUMER_PASSWORD_ACCOUNT2=${SALESFORCE_CONSUMER_PASSWORD_ACCOUNT2:-$10}
+SALESFORCE_USERNAME_ACCOUNT2=${SALESFORCE_USERNAME_ACCOUNT2:-$5}
+SALESFORCE_PASSWORD_ACCOUNT2=${SALESFORCE_PASSWORD_ACCOUNT2:-$6}
+SALESFORCE_SECURITY_TOKEN_ACCOUNT2=${SALESFORCE_SECURITY_TOKEN_ACCOUNT2:-$7}
+SALESFORCE_CONSUMER_KEY_WITH_JWT_ACCOUNT2=${SALESFORCE_CONSUMER_KEY_WITH_JWT_ACCOUNT2:-$8}
 SALESFORCE_INSTANCE_ACCOUNT2=${SALESFORCE_INSTANCE_ACCOUNT2:-"https://login.salesforce.com"}
 
 if [ -z "$SALESFORCE_USERNAME" ]
@@ -39,17 +42,13 @@ then
 fi
 
 
-if [ -z "$SALESFORCE_CONSUMER_KEY" ]
+if [ -z "$SALESFORCE_CONSUMER_KEY_WITH_JWT" ]
 then
-     logerror "SALESFORCE_CONSUMER_KEY is not set. Export it as environment variable or pass it as argument"
+     logerror "SALESFORCE_CONSUMER_KEY_WITH_JWT is not set. Export it as environment variable or pass it as argument. Check README !"
      exit 1
 fi
 
-if [ -z "$SALESFORCE_CONSUMER_PASSWORD" ]
-then
-     logerror "SALESFORCE_CONSUMER_PASSWORD is not set. Export it as environment variable or pass it as argument"
-     exit 1
-fi
+
 
 if [ -z "$SALESFORCE_SECURITY_TOKEN" ]
 then
@@ -75,19 +74,17 @@ then
      exit 1
 fi
 
-if [ -z "$SALESFORCE_CONSUMER_KEY_ACCOUNT2" ]
+if [ -z "$SALESFORCE_CONSUMER_KEY_WITH_JWT_ACCOUNT2" ]
 then
-     logerror "SALESFORCE_CONSUMER_KEY_ACCOUNT2 is not set. Export it as environment variable or pass it as argument"
+     logerror "SALESFORCE_CONSUMER_KEY_WITH_JWT_ACCOUNT2 is not set. Export it as environment variable or pass it as argument. Check README !"
      exit 1
 fi
 
-if [ -z "$SALESFORCE_CONSUMER_PASSWORD_ACCOUNT2" ]
-then
-     logerror "SALESFORCE_CONSUMER_PASSWORD is not set. Export it as environment variable or pass it as argument"
-     exit 1
-fi
 
-PUSH_TOPICS_NAME=MyLeadPushTopics${TAG}
+
+# Unique per test - see the comment in salesforce-pushtopic-source.sh. Sharing
+# one PushTopic name across tests breaks concurrent runs against the same org.
+PUSH_TOPICS_NAME=sobjLead${TAG}
 PUSH_TOPICS_NAME=${PUSH_TOPICS_NAME//[-._]/}
 if [ ${#PUSH_TOPICS_NAME} -gt 25 ]; then
   PUSH_TOPICS_NAME=${PUSH_TOPICS_NAME:0:25}
@@ -96,26 +93,31 @@ fi
 sed -e "s|:PUSH_TOPIC_NAME:|$PUSH_TOPICS_NAME|g" \
     ../../connect/connect-salesforce-sobject-sink/MyLeadPushTopics-template.apex > ../../connect/connect-salesforce-sobject-sink/MyLeadPushTopics.apex
 
+salesforce_ensure_jwt_keystore "$PWD" > /dev/null
+
 PLAYGROUND_ENVIRONMENT=${PLAYGROUND_ENVIRONMENT:-"plaintext"}
 playground start-environment --environment "${PLAYGROUND_ENVIRONMENT}" --docker-compose-override-file "${PWD}/docker-compose.plaintext.yml"
 
 # the Salesforce PushTopic source connector is used to get data into Kafka and the Salesforce SObject sink connector is used to export data from Kafka to Salesforce
 
 log "Login with sfdx CLI"
-docker exec sfdx-cli sh -c "sfdx sfpowerkit:auth:login -u \"$SALESFORCE_USERNAME\" -p \"$SALESFORCE_PASSWORD\" -r \"$SALESFORCE_INSTANCE\" -s \"$SALESFORCE_SECURITY_TOKEN\""
+salesforce_sfdx_with_retry "sfdx sfpowerkit:auth:login -u \"$SALESFORCE_USERNAME\" -p \"$SALESFORCE_PASSWORD\" -r \"$SALESFORCE_INSTANCE\" -s \"$SALESFORCE_SECURITY_TOKEN\""
 
 log "Delete $PUSH_TOPICS_NAME, if required"
 set +e
-docker exec -i sfdx-cli sh -c "sfdx apex run --target-org \"$SALESFORCE_USERNAME\"" << EOF
+# Expected to fail when the PushTopic does not exist yet, so deliberately NOT routed
+# through salesforce_sfdx_with_retry: retrying a step whose failure is normal would
+# spend this test's shared retry budget, and trigger a pointless re-authentication.
+playground container exec --container sfdx-cli --command "sfdx apex run --target-org \"$SALESFORCE_USERNAME\"" << EOF --shell sh
 List<PushTopic> pts = [SELECT Id FROM PushTopic WHERE Name = '$PUSH_TOPICS_NAME'];
 Database.delete(pts);
 EOF
 set -e
 log "Create $PUSH_TOPICS_NAME"
-docker exec sfdx-cli sh -c "sfdx apex run --target-org \"$SALESFORCE_USERNAME\" -f \"/tmp/MyLeadPushTopics.apex\""
+salesforce_sfdx_with_retry "sfdx apex run --target-org \"$SALESFORCE_USERNAME\" -f \"/tmp/MyLeadPushTopics.apex\""
 
 log "Creating Salesforce PushTopics Source connector"
-playground connector create-or-update --connector salesforce-pushtopic-source  << EOF
+salesforce_create_connector_with_retry salesforce-pushtopic-source << EOF
 {
      "connector.class": "io.confluent.salesforce.SalesforcePushTopicSourceConnector",
      "kafka.topic": "sfdc-pushtopic-leads",
@@ -125,10 +127,10 @@ playground connector create-or-update --connector salesforce-pushtopic-source  <
      "salesforce.push.topic.name" : "$PUSH_TOPICS_NAME",
      "salesforce.instance" : "$SALESFORCE_INSTANCE",
      "salesforce.username" : "$SALESFORCE_USERNAME",
-     "salesforce.password" : "$SALESFORCE_PASSWORD",
-     "salesforce.password.token" : "$SALESFORCE_SECURITY_TOKEN",
-     "salesforce.consumer.key" : "$SALESFORCE_CONSUMER_KEY",
-     "salesforce.consumer.secret" : "$SALESFORCE_CONSUMER_PASSWORD",
+     "salesforce.grant.type" : "JWT_BEARER",
+     "salesforce.consumer.key" : "$SALESFORCE_CONSUMER_KEY_WITH_JWT",
+     "salesforce.jwt.keystore.path": "/tmp/salesforce-confluent.keystore.jks",
+     "salesforce.jwt.keystore.password": "confluent",
      "salesforce.initial.start" : "latest",
      "connection.max.message.size": "10048576",
      "key.converter": "org.apache.kafka.connect.json.JsonConverter",
@@ -144,7 +146,21 @@ sleep 5
 LEAD_FIRSTNAME=John_$RANDOM
 LEAD_LASTNAME=Doe_$RANDOM
 log "Add a Lead to Salesforce: $LEAD_FIRSTNAME $LEAD_LASTNAME"
-docker exec sfdx-cli sh -c "sfdx data:create:record  --target-org \"$SALESFORCE_USERNAME\" -s Lead -v \"FirstName='$LEAD_FIRSTNAME' LastName='$LEAD_LASTNAME' Company=Confluent\""
+salesforce_sfdx_with_retry "sfdx data:create:record  --target-org \"$SALESFORCE_USERNAME\" -s Lead -v \"FirstName='$LEAD_FIRSTNAME' LastName='$LEAD_LASTNAME' Company=Confluent\""
+
+# Remove the records this test created, so repeated runs do not accumulate data in a
+# shared Salesforce org. Only the exact records created above are matched. An EXIT trap,
+# so cleanup also happens when an assertion fails.
+cleanup_salesforce_test_data() {
+  set +e
+  salesforce_cleanup_records "$SALESFORCE_USERNAME" "$SALESFORCE_PASSWORD" "$SALESFORCE_SECURITY_TOKEN" "$SALESFORCE_INSTANCE" \
+    "Lead:FirstName = '$LEAD_FIRSTNAME' AND LastName = '$LEAD_LASTNAME'" \
+    "PushTopic:Name = '$PUSH_TOPICS_NAME'"
+  salesforce_cleanup_records "$SALESFORCE_USERNAME_ACCOUNT2" "$SALESFORCE_PASSWORD_ACCOUNT2" "$SALESFORCE_SECURITY_TOKEN_ACCOUNT2" "$SALESFORCE_INSTANCE_ACCOUNT2" \
+    "Lead:FirstName = '$LEAD_FIRSTNAME' AND LastName = '$LEAD_LASTNAME'"
+  set -e
+}
+trap cleanup_salesforce_test_data EXIT
 
 sleep 30
 
@@ -637,34 +653,34 @@ playground topic consume --topic sfdc-pushtopic-leads --min-expected-messages 1 
 # }
 
 log "Creating Salesforce SObject Sink connector"
-playground connector create-or-update --connector salesforce-sobject-sink  << EOF
+salesforce_create_connector_with_retry salesforce-sobject-sink << EOF
 {
-     "connector.class": "io.confluent.salesforce.SalesforceSObjectSinkConnector",
-     "topics": "sfdc-pushtopic-leads",
-     "tasks.max": "1",
-     "curl.logging": "true",
-     "salesforce.object" : "Lead",
-     "salesforce.instance" : "$SALESFORCE_INSTANCE_ACCOUNT2",
-     "salesforce.username" : "$SALESFORCE_USERNAME_ACCOUNT2",
-     "salesforce.password" : "$SALESFORCE_PASSWORD_ACCOUNT2",
-     "salesforce.password.token" : "$SALESFORCE_SECURITY_TOKEN_ACCOUNT2",
-     "salesforce.consumer.key" : "$SALESFORCE_CONSUMER_KEY_ACCOUNT2",
-     "salesforce.consumer.secret" : "$SALESFORCE_CONSUMER_PASSWORD_ACCOUNT2",
-     "key.converter": "org.apache.kafka.connect.json.JsonConverter",
-     "value.converter": "org.apache.kafka.connect.json.JsonConverter",
-     "salesforce.ignore.fields" : "CleanStatus",
-     "salesforce.ignore.reference.fields" : "true",
-     "override.event.type": "true",
-     "salesforce.sink.object.operation": "insert",
-     "reporter.bootstrap.servers": "broker:9092",
-     "reporter.error.topic.name": "error-responses",
-     "reporter.error.topic.replication.factor": 1,
-     "reporter.result.topic.name": "success-responses",
-     "reporter.result.topic.replication.factor": 1,
-     "confluent.license": "",
-     "confluent.topic.bootstrap.servers": "broker:9092",
-     "confluent.topic.replication.factor": "1",
-     "request.max.retries.time.ms": "10000"
+    "connector.class": "io.confluent.salesforce.SalesforceSObjectSinkConnector",
+    "topics": "sfdc-pushtopic-leads",
+    "tasks.max": "1",
+    "curl.logging": "true",
+    "salesforce.object" : "Lead",
+    "salesforce.instance" : "$SALESFORCE_INSTANCE_ACCOUNT2",
+    "salesforce.username" : "$SALESFORCE_USERNAME_ACCOUNT2",
+     "salesforce.grant.type" : "JWT_BEARER",
+     "salesforce.consumer.key" : "$SALESFORCE_CONSUMER_KEY_WITH_JWT_ACCOUNT2",
+     "salesforce.jwt.keystore.path": "/tmp/salesforce-confluent.keystore.jks",
+     "salesforce.jwt.keystore.password": "confluent",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "salesforce.ignore.fields" : "CleanStatus",
+    "salesforce.ignore.reference.fields" : "true",
+    "override.event.type": "true",
+    "salesforce.sink.object.operation": "insert",
+    "reporter.bootstrap.servers": "broker:9092",
+    "reporter.error.topic.name": "error-responses",
+    "reporter.error.topic.replication.factor": 1,
+    "reporter.result.topic.name": "success-responses",
+    "reporter.result.topic.replication.factor": 1,
+    "confluent.license": "",
+    "confluent.topic.bootstrap.servers": "broker:9092",
+    "confluent.topic.replication.factor": "1",
+    "request.max.retries.time.ms": "10000"
 }
 EOF
 
@@ -672,16 +688,24 @@ EOF
 
 sleep 10
 
+# 180s, not 60s: the sink reports to success-responses only after its writes to
+# Salesforce complete, which was observed exceeding 60s.
 log "Verify topic success-responses"
-playground topic consume --topic success-responses --min-expected-messages 1 --timeout 60
+playground topic consume --topic success-responses --min-expected-messages 1 --timeout 180
 
-# log "Verify topic error-responses"
-playground topic consume --topic error-responses --min-expected-messages 0 --timeout 60
+log "Verify the connector reported no errors"
+salesforce_assert_topic_empty error-responses
 
 log "Login with sfdx CLI on the account #2"
-docker exec sfdx-cli sh -c "sfdx sfpowerkit:auth:login -u \"$SALESFORCE_USERNAME_ACCOUNT2\" -p \"$SALESFORCE_PASSWORD_ACCOUNT2\" -r \"$SALESFORCE_INSTANCE_ACCOUNT2\" -s \"$SALESFORCE_SECURITY_TOKEN_ACCOUNT2\""
+salesforce_sfdx_with_retry "sfdx sfpowerkit:auth:login -u \"$SALESFORCE_USERNAME_ACCOUNT2\" -p \"$SALESFORCE_PASSWORD_ACCOUNT2\" -r \"$SALESFORCE_INSTANCE_ACCOUNT2\" -s \"$SALESFORCE_SECURITY_TOKEN_ACCOUNT2\""
 
 log "Get the Lead created on account #2"
-docker exec sfdx-cli sh -c "sfdx force:data:record:get  -u \"$SALESFORCE_USERNAME_ACCOUNT2\" -s Lead -w \"FirstName='$LEAD_FIRSTNAME' LastName='$LEAD_LASTNAME' Company=Confluent\"" > /tmp/result.log  2>&1
+# data:query, not data:record:get: the sink inserts (it never upserts), so a shared org
+# accumulates Leads and an aborted run can leave one behind. data:record:get then fails
+# with "is not a unique qualifier for Lead; N records were retrieved" even though the
+# record the test just wrote is present. data:query returns every match, and the grep
+# below still fails if the record is genuinely missing.
+# || true so cat always runs - without it set -e aborts here and the error is never shown.
+playground container exec --container sfdx-cli --command "sfdx data:query --target-org \"$SALESFORCE_USERNAME_ACCOUNT2\" -q \"SELECT Id, FirstName, LastName FROM Lead WHERE FirstName='$LEAD_FIRSTNAME' AND LastName='$LEAD_LASTNAME' AND Company='Confluent'\"" --shell sh > /tmp/result.log 2>&1 || true
 cat /tmp/result.log
 grep "$LEAD_FIRSTNAME" /tmp/result.log

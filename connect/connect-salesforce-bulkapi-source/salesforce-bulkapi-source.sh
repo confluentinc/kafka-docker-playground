@@ -4,19 +4,23 @@ set -e
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
 source ${DIR}/../../scripts/utils.sh
 
-if [ ! -z "$TAG_BASE" ] && version_gt $TAG_BASE "7.9.99" && [ ! -z "$CONNECTOR_TAG" ] && ! version_gt $CONNECTOR_TAG "2.0.28"
+if connect_cp_version_greater_than_8 && [ ! -z "$CONNECTOR_TAG" ] && ! version_gt $CONNECTOR_TAG "2.0.28"
 then
      logwarn "minimal supported connector version is 2.0.29 for CP 8.0"
-     logwarn "see https://docs.confluent.io/platform/current/connect/supported-connector-version-8.0.html#supported-connector-versions-in-cp-8-0"
+     logwarn "see https://docs.confluent.io/platform/8.0/connect/supported-connector-version.html#"
      exit 111
 fi
 
+# Prefer credentials dedicated to this test when they are configured, so it can run
+# concurrently with the others; falls back to the shared account otherwise.
+salesforce_use_test_creds KDP_BULKAPI_SOURCE
+
+SALESFORCE_CONSUMER_KEY_WITH_JWT=${SALESFORCE_CONSUMER_KEY_WITH_JWT:-$3}
 SALESFORCE_USERNAME=${SALESFORCE_USERNAME:-$1}
 SALESFORCE_PASSWORD=${SALESFORCE_PASSWORD:-$2}
-SALESFORCE_CONSUMER_KEY=${SALESFORCE_CONSUMER_KEY:-$3}
-SALESFORCE_CONSUMER_PASSWORD=${SALESFORCE_CONSUMER_PASSWORD:-$4}
-SALESFORCE_SECURITY_TOKEN=${SALESFORCE_SECURITY_TOKEN:-$5}
+SALESFORCE_SECURITY_TOKEN=${SALESFORCE_SECURITY_TOKEN:-$4}
 SALESFORCE_INSTANCE=${SALESFORCE_INSTANCE:-"https://login.salesforce.com"}
+
 
 if [ -z "$SALESFORCE_USERNAME" ]
 then
@@ -36,19 +40,69 @@ then
      exit 1
 fi
 
+
+# JWT_BEARER for the Bulk API connector arrived on 3.0.x and 3.1.x independently. Rather than
+# duplicating this test per grant, or skipping it on older artifacts, pick the grant from the
+# version actually under test - see salesforce_bulkapi_supports_jwt in utils.sh.
+SALESFORCE_CONNECTOR_VERSION="$(salesforce_connector_version)"
+if salesforce_bulkapi_supports_jwt "$SALESFORCE_CONNECTOR_VERSION"
+then
+  SALESFORCE_GRANT=JWT_BEARER
+else
+  SALESFORCE_GRANT=PASSWORD
+fi
+log "🔐 connector ${SALESFORCE_CONNECTOR_VERSION:-unknown} -> authenticating with $SALESFORCE_GRANT"
+
+if [ "$SALESFORCE_GRANT" = "JWT_BEARER" ]
+then
+  if [ -z "$SALESFORCE_CONSUMER_KEY_WITH_JWT" ]
+  then
+       logerror "SALESFORCE_CONSUMER_KEY_WITH_JWT is not set. Export it as environment variable or pass it as argument. Check README !"
+       exit 1
+  fi
+  # docker-compose.plaintext.yml already mounts the keystore into connect at /tmp.
+  salesforce_ensure_jwt_keystore "$PWD" > /dev/null
+fi
+
 PLAYGROUND_ENVIRONMENT=${PLAYGROUND_ENVIRONMENT:-"plaintext"}
 playground start-environment --environment "${PLAYGROUND_ENVIRONMENT}" --docker-compose-override-file "${PWD}/docker-compose.plaintext.yml"
 
 log "Login with sfdx CLI"
-docker exec sfdx-cli sh -c "sfdx sfpowerkit:auth:login -u \"$SALESFORCE_USERNAME\" -p \"$SALESFORCE_PASSWORD\" -r \"$SALESFORCE_INSTANCE\" -s \"$SALESFORCE_SECURITY_TOKEN\""
+salesforce_sfdx_with_retry "sfdx sfpowerkit:auth:login -u \"$SALESFORCE_USERNAME\" -p \"$SALESFORCE_PASSWORD\" -r \"$SALESFORCE_INSTANCE\" -s \"$SALESFORCE_SECURITY_TOKEN\""
 
 LEAD_FIRSTNAME=John_$RANDOM
 LEAD_LASTNAME=Doe_$RANDOM
 log "Add a Lead to Salesforce: $LEAD_FIRSTNAME $LEAD_LASTNAME"
-docker exec sfdx-cli sh -c "sfdx data:create:record  --target-org \"$SALESFORCE_USERNAME\" -s Lead -v \"FirstName='$LEAD_FIRSTNAME' LastName='$LEAD_LASTNAME' Company=Confluent\""
+salesforce_sfdx_with_retry "sfdx data:create:record  --target-org \"$SALESFORCE_USERNAME\" -s Lead -v \"FirstName='$LEAD_FIRSTNAME' LastName='$LEAD_LASTNAME' Company=Confluent\""
+
+# Remove the records this test created, so repeated runs do not accumulate data in a
+# shared Salesforce org. Only the exact records created above are matched. An EXIT trap,
+# so cleanup also happens when an assertion fails.
+cleanup_salesforce_test_data() {
+  set +e
+  salesforce_cleanup_records "$SALESFORCE_USERNAME" "$SALESFORCE_PASSWORD" "$SALESFORCE_SECURITY_TOKEN" "$SALESFORCE_INSTANCE" \
+    "Lead:FirstName = '$LEAD_FIRSTNAME' AND LastName = '$LEAD_LASTNAME'"
+  set -e
+}
+trap cleanup_salesforce_test_data EXIT
+
+
+
+if [ "$SALESFORCE_GRANT" = "JWT_BEARER" ]
+then
+  SALESFORCE_SOURCE_AUTH="\"salesforce.grant.type\" : \"JWT_BEARER\",
+     \"salesforce.username\" : \"$SALESFORCE_USERNAME\",
+     \"salesforce.consumer.key\" : \"$SALESFORCE_CONSUMER_KEY_WITH_JWT\",
+     \"salesforce.jwt.keystore.path\" : \"/tmp/salesforce-confluent.keystore.jks\",
+     \"salesforce.jwt.keystore.password\" : \"confluent\","
+else
+  SALESFORCE_SOURCE_AUTH="\"salesforce.username\" : \"$SALESFORCE_USERNAME\",
+     \"salesforce.password\" : \"$SALESFORCE_PASSWORD\",
+     \"salesforce.password.token\" : \"$SALESFORCE_SECURITY_TOKEN\","
+fi
 
 log "Creating Salesforce Bulk API Source connector"
-playground connector create-or-update --connector salesforce-bulkapi-source  << EOF
+salesforce_create_connector_with_retry salesforce-bulkapi-source << EOF
 {
      "connector.class": "io.confluent.connect.salesforce.SalesforceBulkApiSourceConnector",
      "kafka.topic": "sfdc-bulkapi-leads",
@@ -56,9 +110,7 @@ playground connector create-or-update --connector salesforce-bulkapi-source  << 
      "curl.logging": "true",
      "salesforce.object" : "Lead",
      "salesforce.instance" : "$SALESFORCE_INSTANCE",
-     "salesforce.username" : "$SALESFORCE_USERNAME",
-     "salesforce.password" : "$SALESFORCE_PASSWORD",
-     "salesforce.password.token" : "$SALESFORCE_SECURITY_TOKEN",
+     $SALESFORCE_SOURCE_AUTH
      "connection.max.message.size": "10048576",
      "key.converter": "org.apache.kafka.connect.json.JsonConverter",
      "value.converter": "org.apache.kafka.connect.json.JsonConverter",
@@ -68,9 +120,16 @@ playground connector create-or-update --connector salesforce-bulkapi-source  << 
 }
 EOF
 
+# Called for both grants. Despite its name this is also the only place this test asserts
+# the task reached RUNNING: it fails with the task's stack trace on any other FAILED
+# state, and fails if the task never comes up within 120s. Gating it on the password
+# grant removed that assertion from the JWT path - the path CI takes - leaving a genuine
+# task failure to surface only as "topic contains 0 messages" with no trace. Its
+# INVALID_SESSION_ID branch simply never fires under JWT.
+restart_task_on_invalid_session salesforce-bulkapi-source
 
-
-sleep 10
-
+# 180s, not 60s: the Bulk API query job runs asynchronously on a Salesforce-side
+# queue, so how long it takes to complete is not under this test's control and
+# varies from seconds to minutes.
 log "Verify we have received the data in sfdc-bulkapi-leads topic"
-playground topic consume --topic sfdc-bulkapi-leads --min-expected-messages 1 --timeout 60
+playground topic consume --topic sfdc-bulkapi-leads --min-expected-messages 1 --timeout 180
