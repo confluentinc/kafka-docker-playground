@@ -17,6 +17,15 @@ then
      exit 1
 fi
 
+# s390x: google/cloud-sdk publishes no s390x image, so gcloud/gsutil run emulated
+# under QEMU, whose AES-NI emulation corrupts TLS to *.googleapis.com
+# ([SSL: RECORD_LAYER_FAILURE] on gcloud auth). OPENSSL_ia32cap=0x0 disables the
+# emulated AES-NI path. Empty (no-op) off s390x.
+OPENSSL_IA32CAP_ENV=""
+if [ "$(uname -m)" = "s390x" ]; then
+  OPENSSL_IA32CAP_ENV="-e OPENSSL_ia32cap=0x0"
+fi
+
 cd ../../connect/connect-gcp-gcs-sink
 GCP_KEYFILE="${PWD}/keyfile.json"
 if [ ! -f ${GCP_KEYFILE} ] && [ -z "$GCP_KEYFILE_CONTENT" ]
@@ -45,16 +54,16 @@ log "Doing gsutil authentication"
 set +e
 docker rm -f gcloud-config
 set -e
-docker run -i -v ${GCP_KEYFILE}:/tmp/keyfile.json --name gcloud-config google/cloud-sdk:latest gcloud auth activate-service-account --project ${GCP_PROJECT} --key-file /tmp/keyfile.json
+docker run -i -v ${GCP_KEYFILE}:/tmp/keyfile.json --name gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gcloud auth activate-service-account --project ${GCP_PROJECT} --key-file /tmp/keyfile.json
 
 log "Creating bucket name <$GCS_BUCKET_NAME>, if required"
 set +e
-docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gsutil mb -p $(cat ${GCP_KEYFILE} | jq -r .project_id) -l $GCS_BUCKET_REGION gs://$GCS_BUCKET_NAME
+docker run -i --volumes-from gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gsutil mb -p $(cat ${GCP_KEYFILE} | jq -r .project_id) -l $GCS_BUCKET_REGION gs://$GCS_BUCKET_NAME
 set -e
 
 log "Removing existing objects in GCS, if applicable"
 set +e
-docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gsutil -m rm -r gs://$GCS_BUCKET_NAME/topics/gcs_topic
+docker run -i --volumes-from gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gsutil -m rm -r gs://$GCS_BUCKET_NAME/topics/gcs_topic
 set -e
 
 log "Sending messages to topic gcs_topic"
@@ -94,10 +103,10 @@ EOF
 sleep 10
 
 log "Listing objects of in GCS"
-docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gsutil ls gs://$GCS_BUCKET_NAME/topics/gcs_topic/partition=0/
+docker run -i --volumes-from gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gsutil ls gs://$GCS_BUCKET_NAME/topics/gcs_topic/partition=0/
 
 log "Getting one of the avro files locally and displaying content with avro-tools"
-docker run -i --volumes-from gcloud-config -v /tmp:/tmp/ google/cloud-sdk:latest gsutil cp gs://$GCS_BUCKET_NAME/topics/gcs_topic/partition=0/gcs_topic+0+0000000000.avro /tmp/gcs_topic+0+0000000000.avro
+docker run -i --volumes-from gcloud-config -v /tmp:/tmp/ ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gsutil cp gs://$GCS_BUCKET_NAME/topics/gcs_topic/partition=0/gcs_topic+0+0000000000.avro /tmp/gcs_topic+0+0000000000.avro
 
 playground  tools read-avro-file --file /tmp/gcs_topic+0+0000000000.avro
 
