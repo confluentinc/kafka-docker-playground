@@ -48,6 +48,9 @@ services:
       KAFKA_ZOOKEEPER_CONNECT: 'zookeeper-europe:2181'
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker-europe:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      # s390x: see KAFKA_AUTO_CREATE_TOPICS_ENABLE gating in scripts/utils.sh
+      # and connect/S390X_CERTIFICATION.md.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: ${KAFKA_AUTO_CREATE_TOPICS_ENABLE:-true}
       CONFLUENT_SUPPORT_CUSTOMER_ID: 'anonymous'
       # Confluent Metrics Reporter for Control Center Cluster Monitoring
       KAFKA_METRIC_REPORTERS: $KAFKA_METRIC_REPORTERS
@@ -91,6 +94,9 @@ services:
       KAFKA_ZOOKEEPER_CONNECT: 'zookeeper-us:2181'
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker-us:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      # s390x: see KAFKA_AUTO_CREATE_TOPICS_ENABLE gating in scripts/utils.sh
+      # and connect/S390X_CERTIFICATION.md.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: ${KAFKA_AUTO_CREATE_TOPICS_ENABLE:-true}
       CONFLUENT_SUPPORT_CUSTOMER_ID: 'anonymous'
       # Confluent Metrics Reporter for Control Center Cluster Monitoring
       KAFKA_METRIC_REPORTERS: $KAFKA_METRIC_REPORTERS
@@ -200,7 +206,7 @@ services:
       # JAVA_DEBUG_OPTS: '-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=0.0.0.0:5005'
       CONNECT_CONNECTOR_CLIENT_CONFIG_OVERRIDE_POLICY: All
     volumes:
-      - ../../confluent-hub:/usr/share/confluent-hub-components
+      - ../../confluent-hub:/usr/share/confluent-hub-components:z
 
   connect-europe:
     image: ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG}
@@ -245,7 +251,7 @@ services:
       # JAVA_DEBUG_OPTS: '-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=0.0.0.0:5005'
       CONNECT_CONNECTOR_CLIENT_CONFIG_OVERRIDE_POLICY: All
     volumes:
-      - ../../confluent-hub:/usr/share/confluent-hub-components
+      - ../../confluent-hub:/usr/share/confluent-hub-components:z
       
   schema-registry-europe:
     image: ${CP_SCHEMA_REGISTRY_IMAGE}:${CP_SCHEMA_REGISTRY_TAG}
@@ -321,7 +327,7 @@ services:
       CONTROL_CENTER_ALERTMANAGER_CONFIG_FILE: /mnt/config/alertmanager.yml
 
   prometheus-c3-v2:
-    image: confluentinc/cp-enterprise-prometheus:2.0.0
+    image: confluentinc/cp-enterprise-prometheus:${CP_C3_NEXTGEN_TAG:-2.0.0}
     hostname: prometheus-c3-v2
     container_name: prometheus-c3-v2
     volumes:
@@ -329,7 +335,7 @@ services:
     command: "--config.file=/mnt/config/prometheus.yml --enable-feature=otlp-write-receiver --web.enable-lifecycle"
 
   alertmanager-c3-v2:
-    image: confluentinc/cp-enterprise-alertmanager:2.0.0
+    image: confluentinc/cp-enterprise-alertmanager:${CP_C3_NEXTGEN_TAG:-2.0.0}
     hostname: alertmanager-c3-v2
     container_name: alertmanager-c3-v2
     depends_on:

@@ -41,3 +41,5 @@ log "✨ If you modify a docker-compose file and want to re-create the container
 
 wait_container_ready connect-us
 wait_container_ready connect-europe
+re_enable_auto_create_topics broker-europe
+re_enable_auto_create_topics broker-us
