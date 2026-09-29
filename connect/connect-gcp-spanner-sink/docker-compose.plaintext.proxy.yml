@@ -3,16 +3,17 @@ services:
 
   nginx-proxy:
     image: reiz/nginx_proxy:latest
+    platform: linux/amd64
     hostname: nginx-proxy
     container_name: nginx-proxy
     ports:
       - "8888:8888"
     volumes:
-      - ../../connect/connect-gcp-spanner-sink/nginx-proxy/nginx_whitelist.conf:/usr/local/nginx/conf/nginx.conf
+      - ../../connect/connect-gcp-spanner-sink/nginx-proxy/nginx_whitelist.conf:/usr/local/nginx/conf/nginx.conf:z
 
   connect:
     volumes:
-        - ../../connect/connect-gcp-spanner-sink/keyfile.json:/tmp/keyfile.json:ro
+        - ../../connect/connect-gcp-spanner-sink/keyfile.json:/tmp/keyfile.json:ro,z
     environment:
       CONNECT_PLUGIN_PATH: /usr/share/confluent-hub-components/confluentinc-kafka-connect-gcp-spanner
     # dns: 0.0.0.0
