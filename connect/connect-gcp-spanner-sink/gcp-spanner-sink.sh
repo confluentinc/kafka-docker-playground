@@ -18,7 +18,8 @@ then
 fi
 
 # generate an 8-character random suffix to make the resource names unique per run
-UNIQUE_SUFFIX=$(uuidgen | cut -c1-8)
+# (uuidgen isn't installed on the s390x agent image, so use the kernel's uuid interface instead)
+UNIQUE_SUFFIX=$(cat /proc/sys/kernel/random/uuid | cut -c1-8)
 
 GCP_SPANNER_INSTANCE="spanner-instance-$USER-$UNIQUE_SUFFIX"
 GCP_SPANNER_DATABASE="spanner-db-$USER-$UNIQUE_SUFFIX"
@@ -48,28 +49,28 @@ log "Doing gsutil authentication"
 set +e
 docker rm -f gcloud-config
 set -e
-docker run --platform linux/amd64 -i -v ${GCP_KEYFILE}:/tmp/keyfile.json --name gcloud-config google/cloud-sdk:latest gcloud auth activate-service-account --project ${GCP_PROJECT} --key-file /tmp/keyfile.json
+docker run --platform linux/amd64 -e OPENSSL_ia32cap=0x0 -i -v ${GCP_KEYFILE}:/tmp/keyfile.json --name gcloud-config google/cloud-sdk:latest gcloud auth activate-service-account --project ${GCP_PROJECT} --key-file /tmp/keyfile.json
 
 set +e
 log "Deleting Database and Instance, if required"
-docker run --platform linux/amd64 -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud spanner databases delete $GCP_SPANNER_DATABASE --instance $GCP_SPANNER_INSTANCE --project $GCP_PROJECT << EOF
+docker run --platform linux/amd64 -e OPENSSL_ia32cap=0x0 -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud spanner databases delete $GCP_SPANNER_DATABASE --instance $GCP_SPANNER_INSTANCE --project $GCP_PROJECT << EOF
 Y
 EOF
-docker run --platform linux/amd64 -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud spanner instances delete $GCP_SPANNER_INSTANCE --project $GCP_PROJECT  << EOF
+docker run --platform linux/amd64 -e OPENSSL_ia32cap=0x0 -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud spanner instances delete $GCP_SPANNER_INSTANCE --project $GCP_PROJECT  << EOF
 Y
 EOF
 set -e
 log "Create a Spanner Instance and Database"
-docker run --platform linux/amd64 -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud spanner instances create $GCP_SPANNER_INSTANCE --project $GCP_PROJECT --config=regional-$GCP_SPANNER_REGION --description=playground-spanner-instance --nodes=1
-docker run --platform linux/amd64 -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud spanner databases create $GCP_SPANNER_DATABASE --instance $GCP_SPANNER_INSTANCE --project $GCP_PROJECT
+docker run --platform linux/amd64 -e OPENSSL_ia32cap=0x0 -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud spanner instances create $GCP_SPANNER_INSTANCE --project $GCP_PROJECT --config=regional-$GCP_SPANNER_REGION --description=playground-spanner-instance --nodes=1
+docker run --platform linux/amd64 -e OPENSSL_ia32cap=0x0 -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud spanner databases create $GCP_SPANNER_DATABASE --instance $GCP_SPANNER_INSTANCE --project $GCP_PROJECT
 
 function cleanup_cloud_resources {
   log "Deleting GCP Spanner database $GCP_SPANNER_DATABASE"
-docker run --platform linux/amd64 -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud spanner databases delete $GCP_SPANNER_DATABASE --instance $GCP_SPANNER_INSTANCE --project $GCP_PROJECT << EOF
+docker run --platform linux/amd64 -e OPENSSL_ia32cap=0x0 -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud spanner databases delete $GCP_SPANNER_DATABASE --instance $GCP_SPANNER_INSTANCE --project $GCP_PROJECT << EOF
 Y
 EOF
   log "Deleting GCP Spanner instance $GCP_SPANNER_INSTANCE"
-docker run --platform linux/amd64 -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud spanner instances delete $GCP_SPANNER_INSTANCE --project $GCP_PROJECT  << EOF
+docker run --platform linux/amd64 -e OPENSSL_ia32cap=0x0 -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud spanner instances delete $GCP_SPANNER_INSTANCE --project $GCP_PROJECT  << EOF
 Y
 EOF
   docker rm -f gcloud-config
@@ -144,7 +145,7 @@ max_retries=2
 retry=0
 while true; do
   sleep 5
-  docker run --platform linux/amd64 -i --rm --volumes-from gcloud-config google/cloud-sdk:latest gcloud spanner databases execute-sql $GCP_SPANNER_DATABASE --instance $GCP_SPANNER_INSTANCE --project $GCP_PROJECT --sql='select * from kafka_products' > /tmp/result.log 2>&1
+  docker run --platform linux/amd64 -e OPENSSL_ia32cap=0x0 -i --rm --volumes-from gcloud-config google/cloud-sdk:latest gcloud spanner databases execute-sql $GCP_SPANNER_DATABASE --instance $GCP_SPANNER_INSTANCE --project $GCP_PROJECT --sql='select * from kafka_products' > /tmp/result.log 2>&1
   cat /tmp/result.log
   if grep -q "notebooks" /tmp/result.log; then
     break
