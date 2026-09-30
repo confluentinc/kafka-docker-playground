@@ -2,7 +2,7 @@
 services:
 
   mongodb:
-    image: mongo:${MONGO_TAG:-latest}
+    image: mongo:latest
     platform: linux/amd64
     hostname: mongodb
     container_name: mongodb

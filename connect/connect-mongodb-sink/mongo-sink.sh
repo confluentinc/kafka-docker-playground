@@ -4,13 +4,6 @@ set -e
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
 source ${DIR}/../../scripts/utils.sh
 
-if [ "$(uname -m)" = "s390x" ]
-then
-     # mongod 8.x (mongo:latest) hangs early in startup under the s390x agent's
-     # QEMU 7.2 x86 emulation, so use the 7.0 line there
-     export MONGO_TAG="7.0"
-fi
-
 # DIAG (drop before PR): the agent's egress IP shares Docker Hub's anonymous pull quota with
 # other traffic; wait (max 40 min) until enough is left for this test's pulls instead of
 # failing on 429 (HEAD requests don't consume quota)
