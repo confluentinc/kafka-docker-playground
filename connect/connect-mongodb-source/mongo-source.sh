@@ -11,6 +11,19 @@ then
      export MONGO_TAG="7.0"
 fi
 
+# DIAG (drop before PR): the agent's egress IP shares Docker Hub's anonymous pull quota with
+# other traffic; wait (max 40 min) until enough is left for this test's pulls instead of
+# failing on 429 (HEAD requests don't consume quota)
+for DIAG_I in $(seq 1 40)
+do
+     DIAG_HUB_TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:ratelimitpreview/test:pull" | sed -E 's/.*"token":"([^"]+)".*/\1/')
+     DIAG_HUB_LEFT=$(curl -s --head -H "Authorization: Bearer ${DIAG_HUB_TOKEN}" https://registry-1.docker.io/v2/ratelimitpreview/test/manifests/latest | tr -d '\r' | awk -F'[ ;]' 'tolower($1)=="ratelimit-remaining:"{print $2}')
+     echo "DIAG-HUB remaining=${DIAG_HUB_LEFT:-?} (check ${DIAG_I})"
+     if [ -n "$DIAG_HUB_LEFT" ] && [ "$DIAG_HUB_LEFT" -ge 12 ]; then break; fi
+     sleep 60
+done
+unset DIAG_HUB_TOKEN
+
 PLAYGROUND_ENVIRONMENT=${PLAYGROUND_ENVIRONMENT:-"plaintext"}
 playground start-environment --environment "${PLAYGROUND_ENVIRONMENT}" --docker-compose-override-file "${PWD}/docker-compose.plaintext.yml"
 
