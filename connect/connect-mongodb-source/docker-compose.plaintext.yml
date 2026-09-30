@@ -11,6 +11,8 @@ services:
     environment:
       MONGO_INITDB_ROOT_USERNAME: myuser
       MONGO_INITDB_ROOT_PASSWORD: mypassword
+      # no value: only set when exported (s390x, see the test script)
+      OPENSSL_ia32cap:
     entrypoint: [ "/usr/bin/mongod", "--bind_ip_all", "--replSet", "myuser" ]
 
   mongo-express:
