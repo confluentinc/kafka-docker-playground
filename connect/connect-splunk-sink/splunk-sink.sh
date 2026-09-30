@@ -23,11 +23,28 @@ then
      SPLUNK_MAX_WAIT=3600
 fi
 SECONDS=0
-# DIAG (drop before PR): every 5 min, print the current Ansible task + container CPU/mem
-( while sleep 300; do echo "DIAG splunk t=${SECONDS}s state=$(docker inspect -f '{{.State.Status}}' splunk 2>&1) stats=[$(docker stats --no-stream --format '{{.CPUPerc}} {{.MemUsage}}' splunk 2>&1)] task=[$(docker logs splunk 2>&1 | grep -a -o 'TASK \[[^]]*\]' | tail -1)] ntasks=$(docker logs splunk 2>&1 | grep -a -c 'TASK \[')"; done ) &
-DIAG_PID=$!
-playground container logs --container splunk --wait-for-log "Ansible playbook complete, will begin streaming splunkd_stderr.log" --max-wait $SPLUNK_MAX_WAIT || { kill $DIAG_PID 2>/dev/null; docker ps -a --filter name=splunk --format 'DIAG {{.Names}} {{.Status}}'; docker container logs --tail=200 splunk 2>&1 | sed 's/^/DIAG-LOG /'; exit 1; }
-kill $DIAG_PID 2>/dev/null || true
+# DIAG (drop before PR): poll marker + container state every 10s, progress line every 5 min,
+# and dump ansible output + splunkd logs as soon as the container exits (or on timeout)
+until docker logs splunk 2>&1 | grep -q "Ansible playbook complete, will begin streaming splunkd_stderr.log"
+do
+     DIAG_STATE=$(docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}}' splunk 2>&1)
+     if [ $((SECONDS % 300)) -lt 10 ]
+     then
+          echo "DIAG splunk t=${SECONDS}s state=${DIAG_STATE} stats=[$(docker stats --no-stream --format '{{.CPUPerc}} {{.MemUsage}}' splunk 2>&1)] task=[$(docker logs splunk 2>&1 | grep -a -o 'TASK \[[^]]*\]' | tail -1)] ntasks=$(docker logs splunk 2>&1 | grep -a -c 'TASK \[')"
+          docker logs splunk 2>&1 | grep -a -E "FAILED - RETRYING|fatal:|\"stderr\"|\"stdout\"" | tail -n 3 | cut -c1-400 | sed 's/^/DIAG-ansible /'
+          docker exec splunk sh -c 'tail -n 4 /opt/splunk/var/log/splunk/splunkd_stderr.log; tail -n 6 /opt/splunk/var/log/splunk/splunkd.log' 2>&1 | cut -c1-300 | sed 's/^/DIAG-tail /'
+     fi
+     if [[ "$DIAG_STATE" != running* ]] || [ $SECONDS -gt $SPLUNK_MAX_WAIT ]
+     then
+          echo "DIAG splunk gave up t=${SECONDS}s state=${DIAG_STATE}"
+          docker container logs --tail=250 splunk 2>&1 | sed 's/^/DIAG-LOG /'
+          for f in splunkd_stderr.log splunkd.log; do
+               docker cp splunk:/opt/splunk/var/log/splunk/$f /tmp/diag-$f >/dev/null 2>&1 && tail -n 60 /tmp/diag-$f | sed "s/^/DIAG-$f /"
+          done
+          exit 1
+     fi
+     sleep 10
+done
 log "SPLUNK has started! (after ${SECONDS}s)"
 
 
