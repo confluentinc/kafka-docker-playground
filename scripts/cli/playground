@@ -9664,6 +9664,51 @@ function avro_tools_run_flags() {
   fi
 }
 
+function qemu_recreate_with_x86_cpuinfo() {
+  # x86 binaries that count CPUs from the "processor : N" lines of
+  # /proc/cpuinfo (e.g. mongod) read the s390x host's cpuinfo under QEMU
+  # (qemu-user emulates /proc/cpuinfo for some guests, not x86), which has no
+  # such lines, so they see 0 CPUs: mongod 7.0 aborts at startup with
+  # "Invariant failure numPartitions > 0". On s390x, re-create compose service
+  # $1 with an x86-style cpuinfo listing the host's CPUs over /proc/cpuinfo,
+  # and keep it in the stored docker command so later re-creates keep it
+  if ! is_s390x
+  then
+    return
+  fi
+  local service="$1"
+  local cpuinfo_file="/tmp/playground-x86-cpuinfo"
+  local override_file="/tmp/playground-x86-cpuinfo-${service}.yml"
+  local nb_cpus=$(nproc)
+  local i
+  for ((i=0; i<nb_cpus; i++))
+  do
+    printf 'processor\t: %s\nphysical id\t: 0\ncore id\t\t: %s\ncpu cores\t: %s\n\n' "$i" "$i" "$nb_cpus"
+  done > "$cpuinfo_file"
+  cat << EOF > "$override_file"
+services:
+  ${service}:
+    volumes:
+      - ${cpuinfo_file}:/proc/cpuinfo:ro,z
+EOF
+  local docker_command=$(playground state get run.docker_command)
+  if [ "$docker_command" == "" ]
+  then
+    logerror "docker_command retrieved from playground state is empty !"
+    return 1
+  fi
+  if [[ "$docker_command" != *"${override_file}"* ]]
+  then
+    docker_command=$(echo "$docker_command" | sed -e "s|up -d --quiet-pull|-f ${override_file} up -d --quiet-pull|")
+    playground state set run.docker_command "$docker_command"
+  fi
+  log "🧮 s390x: re-creating ${service} with an x86-style /proc/cpuinfo (${nb_cpus} CPUs) for its emulated binary"
+  # same file name and flag as 'playground container recreate', which
+  # scripts/utils.sh recognises when the command sources it
+  echo "$docker_command" | sed -e "s|up -d --quiet-pull|up -d --quiet-pull --no-deps ${service}|" > /tmp/playground-command
+  IGNORE_CHECK_FOR_DOCKER_COMPOSE=true bash /tmp/playground-command
+}
+
 function aws() {
     if [ ! -z "$AWS_REGION" ]
     then

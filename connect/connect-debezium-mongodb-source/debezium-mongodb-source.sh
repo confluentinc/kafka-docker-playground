@@ -27,6 +27,9 @@ fi
 PLAYGROUND_ENVIRONMENT=${PLAYGROUND_ENVIRONMENT:-"plaintext"}
 playground start-environment --environment "${PLAYGROUND_ENVIRONMENT}" --docker-compose-override-file "${PWD}/docker-compose.plaintext.yml"
 
+# s390x: the emulated x86 mongod otherwise counts 0 CPUs and aborts at startup
+qemu_recreate_with_x86_cpuinfo mongodb
+
 # mongod (emulated under QEMU on s390x) can take far longer to accept
 # connections and to become primary, so wait for both instead of assuming
 playground container logs --container mongodb --wait-for-log "Waiting for connections" --max-wait 600 || { docker container logs --tail=150 mongodb; exit 1; }
