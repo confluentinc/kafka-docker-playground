@@ -38,9 +38,13 @@ do
      then
           echo "DIAG splunk gave up t=${SECONDS}s state=${DIAG_STATE}"
           docker container logs --tail=250 splunk 2>&1 | sed 's/^/DIAG-LOG /'
+          docker container logs splunk 2>&1 | grep -a -A60 "fatal:" | head -n 120 | cut -c1-400 | sed 's/^/DIAG-FATAL /'
           for f in splunkd_stderr.log splunkd.log; do
                docker cp splunk:/opt/splunk/var/log/splunk/$f /tmp/diag-$f >/dev/null 2>&1 && tail -n 60 /tmp/diag-$f | sed "s/^/DIAG-$f /"
           done
+          # does the emulated x86 splunkd see the s390x host's /proc/cpuinfo (0 x86 "processor" lines)?
+          grep -a -h -E "Detected [0-9]+ \(virtual\) CPUs|CPU|cpuinfo" /tmp/diag-splunkd.log 2>/dev/null | head -n 10 | cut -c1-300 | sed 's/^/DIAG-CPU /'
+          grep -c "^processor" /proc/cpuinfo | sed 's/^/DIAG-CPU host x86-style processor lines: /'
           exit 1
      fi
      sleep 10
