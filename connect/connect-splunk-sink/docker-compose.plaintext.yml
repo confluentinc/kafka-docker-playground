@@ -5,10 +5,15 @@ services:
     hostname: splunk
     container_name: splunk
     platform: linux/amd64
+    # the image's entrypoint/Ansible provisioning escalates with sudo from its
+    # default 'ansible' user. Under QEMU (s390x) setuid binaries can't elevate
+    # (the binfmt_misc entry has no C flag), so start as root instead, where
+    # sudo needs no setuid. Splunk itself still runs as the 'splunk' user.
+    user: root
     ports:
       - 8000:8000
     volumes:
-      - ../../connect/connect-splunk-sink/default.yml:/tmp/defaults/default.yml
+      - ../../connect/connect-splunk-sink/default.yml:/tmp/defaults/default.yml:z
     environment:
       SPLUNK_START_ARGS: --accept-license
       SPLUNK_USERNAME: admin

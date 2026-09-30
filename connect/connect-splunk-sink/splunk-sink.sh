@@ -15,8 +15,16 @@ PLAYGROUND_ENVIRONMENT=${PLAYGROUND_ENVIRONMENT:-"plaintext"}
 playground start-environment --environment "${PLAYGROUND_ENVIRONMENT}" --docker-compose-override-file "${PWD}/docker-compose.plaintext.yml"
 
 
-playground container logs --container splunk --wait-for-log "Ansible playbook complete, will begin streaming splunkd_stderr.log" --max-wait 600
-log "SPLUNK has started!"
+SPLUNK_MAX_WAIT=600
+if [ "$(uname -m)" = "s390x" ]
+then
+     # splunk/splunk has no s390x manifest and runs emulated under QEMU, where
+     # its Ansible first-boot provisioning is much slower
+     SPLUNK_MAX_WAIT=1800
+fi
+SECONDS=0
+playground container logs --container splunk --wait-for-log "Ansible playbook complete, will begin streaming splunkd_stderr.log" --max-wait $SPLUNK_MAX_WAIT
+log "SPLUNK has started! (after ${SECONDS}s)"
 
 
 log "Splunk UI is accessible at http://127.0.0.1:8000 (admin/password)"
