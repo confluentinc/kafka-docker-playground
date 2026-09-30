@@ -4,6 +4,13 @@ set -e
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
 source ${DIR}/../../scripts/utils.sh
 
+if [ "$(uname -m)" = "s390x" ]
+then
+     # mongod 8.x (mongo:latest) hangs early in startup under the s390x agent's
+     # QEMU 7.2 x86 emulation, so use the 7.0 line there
+     export MONGO_TAG="7.0"
+fi
+
 PLAYGROUND_ENVIRONMENT=${PLAYGROUND_ENVIRONMENT:-"plaintext"}
 playground start-environment --environment "${PLAYGROUND_ENVIRONMENT}" --docker-compose-override-file "${PWD}/docker-compose.plaintext.yml"
 
