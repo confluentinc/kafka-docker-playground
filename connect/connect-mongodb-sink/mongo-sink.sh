@@ -7,10 +7,14 @@ source ${DIR}/../../scripts/utils.sh
 PLAYGROUND_ENVIRONMENT=${PLAYGROUND_ENVIRONMENT:-"plaintext"}
 playground start-environment --environment "${PLAYGROUND_ENVIRONMENT}" --docker-compose-override-file "${PWD}/docker-compose.plaintext.yml"
 
+# mongod (emulated under QEMU on s390x) can take far longer to accept
+# connections and to become primary, so wait for both instead of assuming
+playground container logs --container mongodb --wait-for-log "Waiting for connections" --max-wait 600
+
 log "Initialize MongoDB replica set"
 docker exec -i mongodb mongosh --eval 'rs.initiate({_id: "myuser", members:[{_id: 0, host: "mongodb:27017"}]})'
 
-sleep 5
+playground container logs --container mongodb --wait-for-log "Transition to primary complete" --max-wait 300
 
 log "Create a user profile"
 docker exec -i mongodb mongosh << EOF
