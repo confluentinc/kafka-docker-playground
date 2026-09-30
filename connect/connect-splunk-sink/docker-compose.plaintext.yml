@@ -23,6 +23,8 @@ services:
       DEBUG: "true"
       # required when starting as 'splunk': the check chowns /opt/splunk (as root)
       SPLUNK_HOME_OWNERSHIP_ENFORCEMENT: "false"
+      # no value: only set when exported (s390x, see splunk-sink.sh)
+      OPENSSL_ia32cap:
 
   connect:
     depends_on:

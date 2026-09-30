@@ -24,12 +24,22 @@ do
 done
 unset DIAG_HUB_TOKEN
 
+if is_s390x
+then
+     # QEMU's AES-NI emulation corrupts TLS between the emulated splunkd and its
+     # own clients on :8089 ("ssl3_get_finished:digest check failed", Ansible's
+     # "Test basic https endpoint" keeps retrying); force OpenSSL's software path
+     # as qemu_openssl_software_fallback_flag does for docker run (passed through
+     # to the container by docker-compose.plaintext.yml, unset elsewhere)
+     export OPENSSL_ia32cap=0x0
+fi
+
 PLAYGROUND_ENVIRONMENT=${PLAYGROUND_ENVIRONMENT:-"plaintext"}
 playground start-environment --environment "${PLAYGROUND_ENVIRONMENT}" --docker-compose-override-file "${PWD}/docker-compose.plaintext.yml"
 
 
 SPLUNK_MAX_WAIT=600
-if [ "$(uname -m)" = "s390x" ]
+if is_s390x
 then
      # splunk/splunk has no s390x manifest and runs emulated under QEMU, where
      # its Ansible first-boot provisioning is much slower
