@@ -11,9 +11,17 @@ then
      exit 111
 fi
 
-# DIAG (drop before PR): anonymous Docker Hub pull quota left for this agent (HEAD requests don't consume it)
-DIAG_HUB_TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:ratelimitpreview/test:pull" | sed -E 's/.*"token":"([^"]+)".*/\1/')
-curl -s --head -H "Authorization: Bearer ${DIAG_HUB_TOKEN}" https://registry-1.docker.io/v2/ratelimitpreview/test/manifests/latest | grep -i -E "^ratelimit-(limit|remaining)" | tr -d '\r' | sed 's/^/DIAG-HUB /' || true
+# DIAG (drop before PR): the agent's egress IP shares Docker Hub's anonymous pull quota with
+# other traffic; wait (max 40 min) until enough is left for this test's pulls instead of
+# failing on 429 (HEAD requests don't consume quota)
+for DIAG_I in $(seq 1 40)
+do
+     DIAG_HUB_TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:ratelimitpreview/test:pull" | sed -E 's/.*"token":"([^"]+)".*/\1/')
+     DIAG_HUB_LEFT=$(curl -s --head -H "Authorization: Bearer ${DIAG_HUB_TOKEN}" https://registry-1.docker.io/v2/ratelimitpreview/test/manifests/latest | tr -d '\r' | awk -F'[ ;]' 'tolower($1)=="ratelimit-remaining:"{print $2}')
+     echo "DIAG-HUB remaining=${DIAG_HUB_LEFT:-?} (check ${DIAG_I})"
+     if [ -n "$DIAG_HUB_LEFT" ] && [ "$DIAG_HUB_LEFT" -ge 12 ]; then break; fi
+     sleep 60
+done
 unset DIAG_HUB_TOKEN
 
 PLAYGROUND_ENVIRONMENT=${PLAYGROUND_ENVIRONMENT:-"plaintext"}
