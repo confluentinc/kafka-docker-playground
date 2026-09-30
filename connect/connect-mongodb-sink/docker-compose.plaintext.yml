@@ -3,6 +3,7 @@ services:
 
   mongodb:
     image: mongo:latest
+    platform: linux/amd64
     hostname: mongodb
     container_name: mongodb
     ports:
@@ -14,6 +15,7 @@ services:
 
   mongo-express:
     image: mongo-express:latest
+    platform: linux/amd64
     hostname: mongo-express
     container_name: mongo-express
     restart: always
