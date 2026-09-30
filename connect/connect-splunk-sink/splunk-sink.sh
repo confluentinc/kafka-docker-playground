@@ -89,6 +89,6 @@ log "Sleeping 80 seconds"
 sleep 80
 
 log "Verify data is in splunk"
-docker exec splunk bash -c 'sudo /opt/splunk/bin/splunk search "source=\"http:splunk_hec_token\"" -auth "admin:password"' > /tmp/result.log  2>&1
+docker exec splunk bash -c '/opt/splunk/bin/splunk search "source=\"http:splunk_hec_token\"" -auth "admin:password"' > /tmp/result.log  2>&1
 cat /tmp/result.log
 grep "Sword of Honour" /tmp/result.log
