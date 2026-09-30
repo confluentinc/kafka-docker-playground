@@ -11,6 +11,11 @@ then
      exit 111
 fi
 
+# DIAG (drop before PR): anonymous Docker Hub pull quota left for this agent (HEAD requests don't consume it)
+DIAG_HUB_TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:ratelimitpreview/test:pull" | sed -E 's/.*"token":"([^"]+)".*/\1/')
+curl -s --head -H "Authorization: Bearer ${DIAG_HUB_TOKEN}" https://registry-1.docker.io/v2/ratelimitpreview/test/manifests/latest | grep -i -E "^ratelimit-(limit|remaining)" | tr -d '\r' | sed 's/^/DIAG-HUB /' || true
+unset DIAG_HUB_TOKEN
+
 PLAYGROUND_ENVIRONMENT=${PLAYGROUND_ENVIRONMENT:-"plaintext"}
 playground start-environment --environment "${PLAYGROUND_ENVIRONMENT}" --docker-compose-override-file "${PWD}/docker-compose.plaintext.yml"
 
