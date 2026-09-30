@@ -22,12 +22,12 @@ playground start-environment --environment "${PLAYGROUND_ENVIRONMENT}" --docker-
 
 # mongod (emulated under QEMU on s390x) can take far longer to accept
 # connections and to become primary, so wait for both instead of assuming
-playground container logs --container mongodb --wait-for-log "Waiting for connections" --max-wait 600
+playground container logs --container mongodb --wait-for-log "Waiting for connections" --max-wait 600 || { docker container logs --tail=150 mongodb; exit 1; }
 
 log "Initialize MongoDB replica set"
 docker exec -i mongodb mongosh --eval 'rs.initiate({_id: "debezium", members:[{_id: 0, host: "mongodb:27017"}]})'
 
-playground container logs --container mongodb --wait-for-log "Transition to primary complete" --max-wait 300
+playground container logs --container mongodb --wait-for-log "Transition to primary complete" --max-wait 300 || { docker container logs --tail=150 mongodb; exit 1; }
 
 log "Create a user profile"
 docker exec -i mongodb mongosh << EOF
