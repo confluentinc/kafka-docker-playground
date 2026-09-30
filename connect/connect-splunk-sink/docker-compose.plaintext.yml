@@ -19,9 +19,6 @@ services:
       SPLUNK_USERNAME: admin
       SPLUNK_PASSWORD: password
       DEBUG: "true"
-      # skip first-boot recursive chown of /opt/splunk (already splunk-owned in
-      # the image, no volume mounted over it): 10+ min under QEMU on s390x
-      SPLUNK_HOME_OWNERSHIP_ENFORCEMENT: "false"
 
   connect:
     depends_on:
