@@ -11,12 +11,27 @@ then
      exit 111
 fi
 
+SPLUNK_MAX_WAIT=600
+if is_s390x
+then
+     # QEMU's AES-NI emulation corrupts TLS between the emulated splunkd and its
+     # own clients on :8089 ("ssl3_get_finished:digest check failed", Ansible's
+     # "Test basic https endpoint" keeps retrying); force OpenSSL's software path
+     # as qemu_openssl_software_fallback_flag does for docker run (passed through
+     # to the container by docker-compose.plaintext.yml, unset elsewhere)
+     export OPENSSL_ia32cap=0x0
+     # splunk/splunk runs emulated there: its Ansible provisioning took 469s on
+     # the s390x agent (~1 min without QEMU), too close to the default 600s
+     SPLUNK_MAX_WAIT=1200
+fi
+
 PLAYGROUND_ENVIRONMENT=${PLAYGROUND_ENVIRONMENT:-"plaintext"}
 playground start-environment --environment "${PLAYGROUND_ENVIRONMENT}" --docker-compose-override-file "${PWD}/docker-compose.plaintext.yml"
 
 
-playground container logs --container splunk --wait-for-log "Ansible playbook complete, will begin streaming splunkd_stderr.log" --max-wait 600
-log "SPLUNK has started!"
+SECONDS=0
+playground container logs --container splunk --wait-for-log "Ansible playbook complete, will begin streaming splunkd_stderr.log" --max-wait ${SPLUNK_MAX_WAIT}
+log "SPLUNK has started! (after ${SECONDS}s)"
 
 
 log "Splunk UI is accessible at http://127.0.0.1:8000 (admin/password)"
@@ -51,6 +66,6 @@ log "Sleeping 80 seconds"
 sleep 80
 
 log "Verify data is in splunk"
-docker exec splunk bash -c 'sudo /opt/splunk/bin/splunk search "source=\"http:splunk_hec_token\"" -auth "admin:password"' > /tmp/result.log  2>&1
+docker exec splunk bash -c '/opt/splunk/bin/splunk search "source=\"http:splunk_hec_token\"" -auth "admin:password"' > /tmp/result.log  2>&1
 cat /tmp/result.log
 grep "Sword of Honour" /tmp/result.log
