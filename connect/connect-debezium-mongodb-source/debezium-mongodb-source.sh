@@ -43,6 +43,9 @@ fi
 PLAYGROUND_ENVIRONMENT=${PLAYGROUND_ENVIRONMENT:-"plaintext"}
 playground start-environment --environment "${PLAYGROUND_ENVIRONMENT}" --docker-compose-override-file "${PWD}/docker-compose.plaintext.yml"
 
+# DIAG (drop before PR): on exit, show mongod's authentication log lines
+trap 'docker container logs --tail=400 mongodb 2>&1 | grep -a -i -E "auth|scram|sasl" | tail -n 12 | cut -c1-400 | sed "s/^/DIAG-MONGO-AUTH /"' EXIT
+
 
 # s390x: the emulated x86 mongod otherwise counts 0 CPUs and aborts at startup
 qemu_recreate_with_x86_cpuinfo mongodb
