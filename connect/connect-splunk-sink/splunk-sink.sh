@@ -28,6 +28,8 @@ then
      SPLUNK_MAX_WAIT=3600
 fi
 SECONDS=0
+# DIAG (drop before PR): under QEMU, does root's `sudo -u splunk` really switch uid? (explains the root-start EACCES)
+docker exec -u root splunk sh -c 'echo "root uid: $(id -u)"; echo "sudo -u splunk uid: $(sudo -n -u splunk id -u 2>&1)"; echo "ansible-style sudo -H -S -n -i -u splunk uid: $(sudo -H -S -n -i -u splunk id -u 2>&1 </dev/null)"' 2>&1 | sed 's/^/DIAG-PERM /' || true
 # DIAG (drop before PR): poll marker + container state every 10s, progress line every 5 min,
 # and dump ansible output + splunkd logs as soon as the container exits (or on timeout)
 until docker logs splunk 2>&1 | grep -q "Ansible playbook complete, will begin streaming splunkd_stderr.log"
