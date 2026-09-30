@@ -20,10 +20,14 @@ if [ "$(uname -m)" = "s390x" ]
 then
      # splunk/splunk has no s390x manifest and runs emulated under QEMU, where
      # its Ansible first-boot provisioning is much slower
-     SPLUNK_MAX_WAIT=1800
+     SPLUNK_MAX_WAIT=3600
 fi
 SECONDS=0
-playground container logs --container splunk --wait-for-log "Ansible playbook complete, will begin streaming splunkd_stderr.log" --max-wait $SPLUNK_MAX_WAIT
+# DIAG (drop before PR): every 5 min, print the current Ansible task + container CPU/mem
+( while sleep 300; do echo "DIAG splunk t=${SECONDS}s state=$(docker inspect -f '{{.State.Status}}' splunk 2>&1) stats=[$(docker stats --no-stream --format '{{.CPUPerc}} {{.MemUsage}}' splunk 2>&1)] task=[$(docker logs splunk 2>&1 | grep -a -o 'TASK \[[^]]*\]' | tail -1)] ntasks=$(docker logs splunk 2>&1 | grep -a -c 'TASK \[')"; done ) &
+DIAG_PID=$!
+playground container logs --container splunk --wait-for-log "Ansible playbook complete, will begin streaming splunkd_stderr.log" --max-wait $SPLUNK_MAX_WAIT || { kill $DIAG_PID 2>/dev/null; docker ps -a --filter name=splunk --format 'DIAG {{.Names}} {{.Status}}'; docker container logs --tail=200 splunk 2>&1 | sed 's/^/DIAG-LOG /'; exit 1; }
+kill $DIAG_PID 2>/dev/null || true
 log "SPLUNK has started! (after ${SECONDS}s)"
 
 
