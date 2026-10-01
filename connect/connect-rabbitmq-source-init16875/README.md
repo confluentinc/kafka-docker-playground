@@ -1,0 +1,70 @@
+# RabbitMQ Source connector
+
+
+
+## Objective
+
+Quickly test [RabbitMQ Source](https://docs.confluent.io/current/connect/kafka-connect-rabbitmq/index.html#quick-start) connector.
+
+
+## How to run
+
+Simply run:
+
+```
+$ just use <playground run> command and search for rabbitmq.sh in this folder
+```
+
+## Details of what the script is doing
+
+Send message to RabbitMQ in `myqueue`:
+
+```bash
+$ docker exec rabbitmq_producer bash -c "python /producer.py myqueue 5"
+```
+
+Creating RabbitMQ Source connector
+
+```bash
+$ curl -X PUT \
+     -H "Content-Type: application/json" \
+     --data '{
+               "connector.class" : "io.confluent.connect.rabbitmq.RabbitMQSourceConnector",
+               "tasks.max" : "1",
+               "kafka.topic" : "rabbitmq",
+               "rabbitmq.queue" : "myqueue",
+               "rabbitmq.host" : "rabbitmq",
+               "rabbitmq.username" : "myuser",
+               "rabbitmq.password" : "mypassword",
+               "confluent.topic.bootstrap.servers": "broker:9092",
+               "confluent.topic.replication.factor": "1"
+          }' \
+     http://localhost:8083/connectors/rabbitmq-source/config | jq .
+```
+
+
+Verify we have received the data in `rabbitmq` topic
+
+```bash
+playground topic consume --topic rabbitmq --min-expected-messages 5 --timeout 60
+```
+
+Results:
+
+```
+"´\u0001{\"id\": 0, \"body\": \"010101010101010101010101010101010101010101010101010101010101010101010\"}"
+"´\u0001{\"id\": 1, \"body\": \"010101010101010101010101010101010101010101010101010101010101010101010\"}"
+"´\u0001{\"id\": 2, \"body\": \"010101010101010101010101010101010101010101010101010101010101010101010\"}"
+"´\u0001{\"id\": 3, \"body\": \"010101010101010101010101010101010101010101010101010101010101010101010\"}"
+"´\u0001{\"id\": 4, \"body\": \"010101010101010101010101010101010101010101010101010101010101010101010\"}"
+```
+
+Note:
+
+Run the following command to consume all records in RabbitMQ queue `myqueue`
+
+```bash
+$ docker exec -i rabbitmq_consumer bash -c "python /consumer.py myqueue"
+```
+
+N.B: Control Center is reachable at [http://127.0.0.1:9021](http://127.0.0.1:9021])
