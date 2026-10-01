@@ -28,6 +28,29 @@ then
     export FLINK_TAG=latest
 fi
 
+# Architecture-aware defaults - deliberately unconditional (not nested inside
+# the "if [ -z $TAG ]" block below), since callers that pre-set TAG (e.g. CI
+# pipelines that pin CP_VERSION) still need these picked correctly for s390x.
+if [ -z "$CP_CONNECT_IMAGE" ]
+then
+  if [ "$(uname -m)" = "s390x" ]
+  then
+    export CP_CONNECT_IMAGE=confluentinc/cp-server-connect
+  else
+    export CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
+  fi
+fi
+
+if [ -z "$CP_C3_NEXTGEN_TAG" ]
+then
+  if [ "$(uname -m)" = "s390x" ]
+  then
+    export CP_C3_NEXTGEN_TAG=2.5.0
+  else
+    export CP_C3_NEXTGEN_TAG=2.0.0
+  fi
+fi
+
 # Setting up TAG environment variable
 #
 if [ -z "$TAG" ]
@@ -57,10 +80,8 @@ then
       export CP_KAFKA_IMAGE=confluentinc/cp-server
     fi
 
-    if [ -z "$CP_CONNECT_IMAGE" ]
-    then
-      export CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
-    fi
+    # CP_CONNECT_IMAGE / CP_C3_NEXTGEN_TAG are set unconditionally above,
+    # before this TAG check - see that block for why.
 
     if [ -z "$CP_SCHEMA_REGISTRY_IMAGE" ]
     then
@@ -273,7 +294,12 @@ else
         else
           if [ -z "$CP_CONNECT_IMAGE" ]
           then
-            export CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
+            if [ "$(uname -m)" = "s390x" ]
+            then
+              export CP_CONNECT_IMAGE=confluentinc/cp-server-connect
+            else
+              export CP_CONNECT_IMAGE=confluentinc/cp-server-connect-base
+            fi
           fi
         fi
     else
@@ -408,7 +434,7 @@ then
           fi
           log "🎱 Installing connector $owner/$name:$CONNECTOR_VERSION"
           set +e
-          docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt $owner/$name:$CONNECTOR_VERSION && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components" > /tmp/result.log 2>&1
+          docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components:z ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt $owner/$name:$CONNECTOR_VERSION && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components" > /tmp/result.log 2>&1
           if [ $? != 0 ]
           then
               logerror "❌ failed to install connector $owner/$name:$CONNECTOR_VERSION"
@@ -570,7 +596,7 @@ else
 
               log "🎱 Installing connector from zip $connector_zip_name"
               set +e
-              docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components  -v /tmp:/tmp ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt /tmp/${connector_zip_name} && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components" > /tmp/result.log 2>&1
+              docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components:z  -v /tmp:/tmp:z ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt /tmp/${connector_zip_name} && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components" > /tmp/result.log 2>&1
               if [ $? != 0 ]
               then
                   logerror "❌ failed to install connector from zip $connector_zip_name"
@@ -613,7 +639,7 @@ else
 
             log "🎱 Installing connector $owner/$name:$version_to_get_from_hub"
             set +e
-            docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt $owner/$name:$version_to_get_from_hub && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components" > /tmp/result.log 2>&1
+            docker run -u0 -i --rm -v ${DIR_UTILS}/../confluent-hub:/usr/share/confluent-hub-components:z ${CP_CONNECT_IMAGE}:${CP_CONNECT_TAG} bash -c "confluent-hub install --no-prompt $owner/$name:$version_to_get_from_hub && chown -R $(id -u $USER):$(id -g $USER) /usr/share/confluent-hub-components" > /tmp/result.log 2>&1
             if [ $? != 0 ]
             then
                 logerror "❌ failed to install connector $owner/$name:$version_to_get_from_hub"
