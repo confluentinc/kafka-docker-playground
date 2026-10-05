@@ -116,7 +116,14 @@ playground topic produce -t blob_topic --nb-messages 10 << 'EOF'
 }
 EOF
 
-sleep 10
+if [ "$(uname -m)" = "s390x" ]
+then
+    # extra margin on s390x before reading back the blob: a single missed flush
+    # here fails the whole run under set -e
+    sleep 30
+else
+    sleep 10
+fi
 
 log "Listing objects of container ${AZURE_CONTAINER_NAME} in Azure Blob Storage"
 az storage fs file list --account-name "${AZURE_ACCOUNT_NAME}" --account-key "${AZURE_ACCOUNT_KEY}" -f "${AZURE_CONTAINER_NAME}" --output table
