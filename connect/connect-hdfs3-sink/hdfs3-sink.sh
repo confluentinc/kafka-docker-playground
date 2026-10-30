@@ -93,3 +93,69 @@ EOF
   cat /tmp/result.log
   grep "value1" /tmp/result.log
 fi
+
+# Parquet: the hdfs3 sink writes Parquet with SNAPPY compression (hard-coded in its
+# ParquetRecordWriterProvider). snappy-java has no pure-Java fallback, so this exercises the
+# connector's bundled native snappy library (e.g. on s390x). Reading the files back is covered
+# by hdfs3-source.sh.
+log "Creating HDFS Sink connector writing Parquet (snappy)"
+playground connector create-or-update --connector hdfs3-sink-parquet  << EOF
+{
+  "connector.class":"io.confluent.connect.hdfs3.Hdfs3SinkConnector",
+  "tasks.max":"1",
+  "topics":"test_hdfs_parquet",
+  "store.url":"hdfs://namenode:9000",
+  "topics.dir":"/topics-parquet",
+  "flush.size":"3",
+  "hadoop.conf.dir":"/etc/hadoop/",
+  "format.class":"io.confluent.connect.hdfs3.parquet.ParquetFormat",
+  "partitioner.class": "io.confluent.connect.storage.partitioner.DefaultPartitioner",
+  "rotate.interval.ms":"120000",
+  "hadoop.home":"/opt/hadoop-3.1.3/share/hadoop/common",
+  "logs.dir":"/tmp/parquet",
+  "hive.integration": "false",
+  "confluent.license": "",
+  "confluent.topic.bootstrap.servers": "broker:9092",
+  "confluent.topic.replication.factor": "1",
+  "key.converter":"org.apache.kafka.connect.storage.StringConverter",
+  "value.converter":"io.confluent.connect.avro.AvroConverter",
+  "value.converter.schema.registry.url":"http://schema-registry:8081",
+  "schema.compatibility":"BACKWARD"
+}
+EOF
+
+log "Sending messages to topic test_hdfs_parquet"
+playground topic produce -t test_hdfs_parquet --nb-messages 10 --forced-value '{"f1":"value%g"}' << 'EOF'
+{
+  "type": "record",
+  "name": "myrecord",
+  "fields": [
+    {
+      "name": "f1",
+      "type": "string"
+    }
+  ]
+}
+EOF
+
+sleep 10
+
+log "Listing content of /topics-parquet/test_hdfs_parquet/partition=0 in HDFS"
+docker exec namenode bash -c "/opt/hadoop-3.1.3/bin/hdfs dfs -ls /topics-parquet/test_hdfs_parquet/partition=0" | tee /tmp/hdfs3-sink-parquet-ls.log
+
+log "Verifying that 3 Parquet files (10 records, flush.size=3) were committed"
+nb_parquet_files=$(grep -c "\.parquet$" /tmp/hdfs3-sink-parquet-ls.log || true)
+if [ "$nb_parquet_files" -lt 3 ]
+then
+     logerror "❌ expected at least 3 committed Parquet files, found $nb_parquet_files"
+     exit 1
+fi
+
+log "Verifying that the Parquet sink task is still RUNNING"
+docker exec connect curl -s http://localhost:8083/connectors/hdfs3-sink-parquet/status | tee /tmp/hdfs3-sink-parquet-status.json
+echo
+if grep -q "FAILED" /tmp/hdfs3-sink-parquet-status.json || ! grep -q "RUNNING" /tmp/hdfs3-sink-parquet-status.json
+then
+     logerror "❌ hdfs3-sink-parquet is not RUNNING"
+     exit 1
+fi
