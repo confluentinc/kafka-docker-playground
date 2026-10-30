@@ -19,6 +19,7 @@ services:
 
   namenode:
     image: kdp/hadoop:3.3.6
+    platform: linux/amd64
     container_name: namenode
     hostname: namenode
     environment:
@@ -35,10 +36,11 @@ services:
       - "9870:9870"
       - "9000:9000"
     volumes:
-      - ../../connect/connect-hdfs3-sink/hadoop-config:/etc/hadoop/ # Mount the config directory
+      - ../../connect/connect-hdfs3-sink/hadoop-config:/etc/hadoop/:z # Mount the config directory
 
   datanode:
     image: kdp/hadoop:3.3.6
+    platform: linux/amd64
     container_name: datanode
     hostname: datanode
     environment:
@@ -51,12 +53,13 @@ services:
         exec hadoop datanode
       "
     volumes:
-      - ../../connect/connect-hdfs3-sink/hadoop-config:/etc/hadoop/ # Mount the config directory
+      - ../../connect/connect-hdfs3-sink/hadoop-config:/etc/hadoop/:z # Mount the config directory
     depends_on:
       - namenode
 
   resourcemanager:
     image: kdp/hadoop:3.3.6
+    platform: linux/amd64
     container_name: resourcemanager
     hostname: resourcemanager
     environment:
@@ -65,31 +68,33 @@ services:
     ports:
       - "8088:8088"
     volumes:
-      - ../../connect/connect-hdfs3-sink/hadoop-config:/etc/hadoop/ # Mount the config directory
+      - ../../connect/connect-hdfs3-sink/hadoop-config:/etc/hadoop/:z # Mount the config directory
     depends_on:
       - namenode
       - datanode
 
   nodemanager:
     image: kdp/hadoop:3.3.6
+    platform: linux/amd64
     container_name: nodemanager
     hostname: nodemanager
     environment:
       - HADOOP_CONF_DIR=/etc/hadoop
     command: ["yarn", "nodemanager"]
     volumes:
-      - ../../connect/connect-hdfs3-sink/hadoop-config:/etc/hadoop/ # Mount the config directory
+      - ../../connect/connect-hdfs3-sink/hadoop-config:/etc/hadoop/:z # Mount the config directory
     depends_on:
       - resourcemanager
 
   hive-metastore:
     image: apache/hive:4.0.1
+    platform: linux/amd64
     container_name: hive-metastore
     hostname: hive-metastore
     environment:
       - SERVICE_NAME=metastore
     volumes:
-      - ../../connect/connect-hdfs3-sink/hadoop-config:/opt/hive/conf
+      - ../../connect/connect-hdfs3-sink/hadoop-config:/opt/hive/conf:z
     ports:
       - "9083:9083"
     depends_on:
@@ -97,6 +102,7 @@ services:
 
   hive-server:
     image: apache/hive:4.0.1
+    platform: linux/amd64
     container_name: hive-server
     hostname: hive-server
     environment:
@@ -105,7 +111,7 @@ services:
       - HIVE_CONF_fs.defaultfs=hdfs://namenode:9000
       - HADOOP_USER_NAME=hive
     volumes:
-      - ../../connect/connect-hdfs3-sink/hadoop-config:/opt/hive/conf
+      - ../../connect/connect-hdfs3-sink/hadoop-config:/opt/hive/conf:z
     ports:
       - "10003:10000"
       - "10004:10002"
@@ -115,10 +121,11 @@ services:
 
   hive-init-action:
     image: kdp/hadoop:3.3.6
+    platform: linux/amd64
     container_name: hive-init
     hostname: hive-init
     volumes:
-      - ../../connect/connect-hdfs3-sink/hadoop-config:/etc/hadoop/ # Mount the config directory
+      - ../../connect/connect-hdfs3-sink/hadoop-config:/etc/hadoop/:z # Mount the config directory
     environment:
       - HADOOP_CONF_DIR=/etc/hadoop
     command: >
