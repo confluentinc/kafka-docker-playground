@@ -46,6 +46,11 @@ cd -
 PLAYGROUND_ENVIRONMENT=${PLAYGROUND_ENVIRONMENT:-"plaintext"}
 playground start-environment --environment "${PLAYGROUND_ENVIRONMENT}" --docker-compose-override-file "${PWD}/docker-compose.plaintext.yml"
 
+# Record the architecture the connect worker actually runs on (s390x certification evidence:
+# under QEMU uname -m would report x86_64)
+log "connect container arch: $(docker exec connect uname -m 2>/dev/null || echo unknown)"
+docker exec connect java -XshowSettings:properties -version 2>&1 | grep -E "os.arch|java.vm.name" || true
+
 log "Doing gsutil authentication"
 set +e
 docker rm -f gcloud-config
