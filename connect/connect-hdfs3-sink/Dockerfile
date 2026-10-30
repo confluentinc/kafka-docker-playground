@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 apache/hadoop:3.3.6
+FROM apache/hadoop:3.3.6
 
 # Switch to root user to modify the file
 USER root

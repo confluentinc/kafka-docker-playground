@@ -25,6 +25,19 @@ sleep 10
 # Note in this simple example, if you get into an issue with permissions at the local HDFS level, it may be easiest to unlock the permissions unless you want to debug that more.
 docker exec namenode bash -c "/opt/hadoop-3.1.3/bin/hdfs dfs -chmod 777  /"
 
+# the hive metastore can take several minutes to start when emulated (QEMU on s390x)
+MAX_WAIT=600
+CUR_WAIT=0
+log "⌛ Waiting up to $MAX_WAIT seconds for hive-metastore to listen on port 9083"
+while ! docker exec connect bash -c "</dev/tcp/hive-metastore/9083" > /dev/null 2>&1; do
+     sleep 10
+     CUR_WAIT=$(( CUR_WAIT+10 ))
+     if [[ "$CUR_WAIT" -gt "$MAX_WAIT" ]]; then
+          docker logs --tail 100 hive-metastore
+          logerror "❌ hive-metastore is not listening on port 9083 after $MAX_WAIT seconds"
+          exit 1
+     fi
+done
 
 log "Creating HDFS Sink connector with Hive integration"
 playground connector create-or-update --connector hdfs3-sink  << EOF
