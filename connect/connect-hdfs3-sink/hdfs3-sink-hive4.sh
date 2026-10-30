@@ -5,7 +5,14 @@ DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
 source ${DIR}/../../scripts/utils.sh
 
 log "Building Hadoop Docker image (replacing if exists)"
-docker build -t kdp/hadoop:3.3.6 ${DIR}
+# --load is needed with a container-driver buildx builder, but the classic builder (DOCKER_BUILDKIT=0, always used with podman) does not know it
+load_flag=""
+if [ "${DOCKER_BUILDKIT:-}" != "0" ]
+then
+     load_flag="--load"
+fi
+docker build $load_flag -t kdp/hadoop:3.3.6 ${DIR}
+rm -f ${DIR}/hadoop-config/hiveserver2.pid
 
 PLAYGROUND_ENVIRONMENT=${PLAYGROUND_ENVIRONMENT:-"plaintext"}
 playground start-environment --environment "${PLAYGROUND_ENVIRONMENT}" --docker-compose-override-file "${PWD}/docker-compose.hive4.yml"
@@ -107,21 +114,6 @@ log "Displaying beeline results"
 cat /tmp/result.log
 
 log "Verifying data was written correctly"
-if grep -q "value1" /tmp/result.log; then
-    log "✅ SUCCESS: Data found in Hive table"
-else
-    log "❌ ERROR: Data not found in Hive table"
-fi
-
-if grep -q "test_hdfs" /tmp/result.log; then
-    log "✅ SUCCESS: Hive table created successfully"
-else
-    log "❌ ERROR: Hive table not found"
-fi
-
-if grep -q "testhive" /tmp/result.log; then
-    log "✅ SUCCESS: Hive database created successfully"
-else
-    log "❌ ERROR: Hive database not found"
-fi
-
+grep "testhive" /tmp/result.log
+grep "test_hdfs" /tmp/result.log
+grep "value1" /tmp/result.log
