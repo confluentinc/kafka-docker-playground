@@ -125,3 +125,77 @@ sleep 10
 
 log "Verifying topic copy_of_test_hdfs"
 playground topic consume --topic copy_of_test_hdfs --min-expected-messages 9 --timeout 60
+
+# Parquet round trip: the hdfs3 sink writes Parquet with SNAPPY compression (hard-coded in its
+# ParquetRecordWriterProvider) and the hdfs3 source reads it back. snappy-java has no pure-Java
+# fallback, so this exercises the bundled native snappy library of both connectors (e.g. on s390x).
+# Uses its own topics.dir so the Avro source connector above does not pick up the Parquet files.
+log "Creating HDFS Sink connector writing Parquet (snappy)"
+playground connector create-or-update --connector hdfs3-sink-parquet  << EOF
+{
+     "connector.class":"io.confluent.connect.hdfs3.Hdfs3SinkConnector",
+     "tasks.max":"1",
+     "topics":"test_hdfs_parquet",
+     "store.url":"hdfs://namenode:9000",
+     "topics.dir":"/topics-parquet",
+     "flush.size":"3",
+     "hadoop.conf.dir":"/etc/hadoop/",
+     "format.class":"io.confluent.connect.hdfs3.parquet.ParquetFormat",
+     "partitioner.class":"io.confluent.connect.storage.partitioner.DefaultPartitioner",
+     "rotate.interval.ms":"120000",
+     "hadoop.home":"/opt/hadoop-3.1.3/share/hadoop/common",
+     "logs.dir":"/tmp/parquet",
+     "hive.integration": "false",
+     "confluent.license": "",
+     "confluent.topic.bootstrap.servers": "broker:9092",
+     "confluent.topic.replication.factor": "1",
+     "key.converter":"org.apache.kafka.connect.storage.StringConverter",
+     "value.converter":"io.confluent.connect.avro.AvroConverter",
+     "value.converter.schema.registry.url":"http://schema-registry:8081",
+     "schema.compatibility":"BACKWARD"
+}
+EOF
+
+log "Sending messages to topic test_hdfs_parquet"
+playground topic produce -t test_hdfs_parquet --nb-messages 10 --forced-value '{"f1":"value%g"}' << 'EOF'
+{
+  "type": "record",
+  "name": "myrecord",
+  "fields": [
+    {
+      "name": "f1",
+      "type": "string"
+    }
+  ]
+}
+EOF
+
+sleep 10
+
+log "Listing content of /topics-parquet/test_hdfs_parquet/partition=0 in HDFS"
+docker exec namenode bash -c "/opt/hadoop-3.1.3/bin/hdfs dfs -ls /topics-parquet/test_hdfs_parquet/partition=0" | tee /tmp/hdfs3-parquet-ls.log
+grep "\.parquet" /tmp/hdfs3-parquet-ls.log
+
+log "Creating HDFS Source connector reading Parquet"
+playground connector create-or-update --connector hdfs3-source-parquet  << EOF
+{
+          "connector.class":"io.confluent.connect.hdfs3.Hdfs3SourceConnector",
+          "tasks.max":"1",
+          "hdfs.url":"hdfs://namenode:9000",
+          "topics.dir":"/topics-parquet",
+          "hadoop.conf.dir":"/etc/hadoop/",
+          "hadoop.home":"/opt/hadoop-3.1.3/share/hadoop/common",
+          "format.class" : "io.confluent.connect.hdfs3.format.parquet.ParquetFormat",
+          "confluent.topic.bootstrap.servers": "broker:9092",
+          "confluent.topic.replication.factor": "1",
+          "transforms" : "AddPrefix",
+          "transforms.AddPrefix.type" : "org.apache.kafka.connect.transforms.RegexRouter",
+          "transforms.AddPrefix.regex" : ".*",
+          "transforms.AddPrefix.replacement" : "copy_of_\$0"
+          }
+EOF
+
+sleep 10
+
+log "Verifying topic copy_of_test_hdfs_parquet"
+playground topic consume --topic copy_of_test_hdfs_parquet --min-expected-messages 9 --timeout 60
