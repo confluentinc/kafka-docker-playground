@@ -152,9 +152,8 @@ then
 fi
 
 log "Verifying that the Parquet sink task is still RUNNING"
-docker exec connect curl -s http://localhost:8083/connectors/hdfs3-sink-parquet/status | tee /tmp/hdfs3-sink-parquet-status.json
-echo
-if grep -q "FAILED" /tmp/hdfs3-sink-parquet-status.json || ! grep -q "RUNNING" /tmp/hdfs3-sink-parquet-status.json
+playground connector status --connector hdfs3-sink-parquet 2>&1 | tee /tmp/hdfs3-sink-parquet-status.log
+if grep -q "FAILED" /tmp/hdfs3-sink-parquet-status.log || ! grep -q "RUNNING" /tmp/hdfs3-sink-parquet-status.log
 then
      logerror "❌ hdfs3-sink-parquet is not RUNNING"
      exit 1
