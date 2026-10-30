@@ -17,6 +17,15 @@ then
      exit 1
 fi
 
+# s390x: google/cloud-sdk publishes no s390x image, so gcloud runs emulated
+# under QEMU, whose AES-NI emulation corrupts TLS to *.googleapis.com
+# ([SSL: RECORD_LAYER_FAILURE] on gcloud auth). OPENSSL_ia32cap=0x0 disables the
+# emulated AES-NI path. Empty (no-op) off s390x.
+OPENSSL_IA32CAP_ENV=""
+if [ "$(uname -m)" = "s390x" ]; then
+  OPENSSL_IA32CAP_ENV="-e OPENSSL_ia32cap=0x0"
+fi
+
 cd ../../connect/connect-gcp-pubsub-source
 GCP_KEYFILE="${PWD}/keyfile.json"
 if [ ! -f ${GCP_KEYFILE} ] && [ -z "$GCP_KEYFILE_CONTENT" ]
@@ -37,43 +46,50 @@ cd -
 PLAYGROUND_ENVIRONMENT=${PLAYGROUND_ENVIRONMENT:-"plaintext"}
 playground start-environment --environment "${PLAYGROUND_ENVIRONMENT}" --docker-compose-override-file "${PWD}/docker-compose.plaintext.yml"
 
+# Record the architecture the connect worker actually runs on (s390x certification evidence:
+# under QEMU uname -m would report x86_64)
+log "connect container arch: $(docker exec connect uname -m 2>/dev/null || echo unknown)"
+docker exec connect java -XshowSettings:properties -version 2>&1 | grep -E "os.arch|java.vm.name" || true
+
 log "Doing gsutil authentication"
 set +e
 docker rm -f gcloud-config
 set -e
-docker run -i -v ${GCP_KEYFILE}:/tmp/keyfile.json --name gcloud-config google/cloud-sdk:latest gcloud auth activate-service-account --project ${GCP_PROJECT} --key-file /tmp/keyfile.json
+docker run -i -v ${GCP_KEYFILE}:/tmp/keyfile.json --name gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gcloud auth activate-service-account --project ${GCP_PROJECT} --key-file /tmp/keyfile.json
 
-GCP_PUB_SUB_TOPIC="topic-1-$GITHUB_RUN_NUMBER"
-GCP_PUB_SUB_SUBSCRIPTION="subscription-1-$GITHUB_RUN_NUMBER"
+# GITHUB_RUN_NUMBER is unset outside GitHub Actions (e.g. Semaphore), so fall back to a random suffix
+UNIQUE_SUFFIX=${GITHUB_RUN_NUMBER:-$(cat /proc/sys/kernel/random/uuid 2>/dev/null | cut -c1-8)}
+GCP_PUB_SUB_TOPIC="topic-1-$UNIQUE_SUFFIX"
+GCP_PUB_SUB_SUBSCRIPTION="subscription-1-$UNIQUE_SUFFIX"
 
 # cleanup if required
 set +e
 log "Delete topic $GCP_PUB_SUB_TOPIC and subscription $GCP_PUB_SUB_SUBSCRIPTION, if required"
-docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} topics delete $GCP_PUB_SUB_TOPIC
-docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} subscriptions delete $GCP_PUB_SUB_SUBSCRIPTION
+docker run -i --volumes-from gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} topics delete $GCP_PUB_SUB_TOPIC
+docker run -i --volumes-from gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} subscriptions delete $GCP_PUB_SUB_SUBSCRIPTION
 set -e
 
 log "Create a Pub/Sub topic called $GCP_PUB_SUB_TOPIC"
-docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} topics create $GCP_PUB_SUB_TOPIC
+docker run -i --volumes-from gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} topics create $GCP_PUB_SUB_TOPIC
 
 log "Create a Pub/Sub subscription called $GCP_PUB_SUB_SUBSCRIPTION"
-docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} subscriptions create --topic $GCP_PUB_SUB_TOPIC $GCP_PUB_SUB_SUBSCRIPTION --ack-deadline 60
+docker run -i --volumes-from gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} subscriptions create --topic $GCP_PUB_SUB_TOPIC $GCP_PUB_SUB_SUBSCRIPTION --ack-deadline 60
 
 function cleanup_cloud_resources {
     set +e
     log "Delete GCP PubSub topic $GCP_PUB_SUB_TOPIC and subscription $GCP_PUB_SUB_SUBSCRIPTION"
     check_if_continue
-    docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} topics delete $GCP_PUB_SUB_TOPIC
-    docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} subscriptions delete $GCP_PUB_SUB_SUBSCRIPTION
+    docker run -i --volumes-from gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} topics delete $GCP_PUB_SUB_TOPIC
+    docker run -i --volumes-from gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} subscriptions delete $GCP_PUB_SUB_SUBSCRIPTION
 
     docker rm -f gcloud-config
 }
 trap cleanup_cloud_resources EXIT
 
 log "Publish three messages to $GCP_PUB_SUB_TOPIC"
-docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} topics publish $GCP_PUB_SUB_TOPIC --message "Peter"
-docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} topics publish $GCP_PUB_SUB_TOPIC --message "Megan"
-docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} topics publish $GCP_PUB_SUB_TOPIC --message "Erin"
+docker run -i --volumes-from gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} topics publish $GCP_PUB_SUB_TOPIC --message "Peter"
+docker run -i --volumes-from gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} topics publish $GCP_PUB_SUB_TOPIC --message "Megan"
+docker run -i --volumes-from gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gcloud pubsub --project ${GCP_PROJECT} topics publish $GCP_PUB_SUB_TOPIC --message "Erin"
 
 sleep 10
 
