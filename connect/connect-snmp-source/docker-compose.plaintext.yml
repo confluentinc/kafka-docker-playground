@@ -3,6 +3,7 @@ services:
 
   snmptrap:
     image: lidaheemc/docker-snmp
+    platform: linux/amd64
     hostname: snmptrap
     container_name: snmptrap
 
