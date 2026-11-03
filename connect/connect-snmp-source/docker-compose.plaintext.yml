@@ -4,6 +4,8 @@ services:
   snmptrap:
     image: lidaheemc/docker-snmp
     platform: linux/amd64
+    # the image's python2 supervisord can't parse its own source under QEMU on s390x; the test only needs the snmptrap CLI
+    command: sleep infinity
     hostname: snmptrap
     container_name: snmptrap
 
