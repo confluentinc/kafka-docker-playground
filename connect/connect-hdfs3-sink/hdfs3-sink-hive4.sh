@@ -129,6 +129,7 @@ log "Displaying beeline results"
 cat /tmp/result.log
 
 log "Verifying data was written correctly"
-grep "testhive" /tmp/result.log
-grep "test_hdfs" /tmp/result.log
-grep "value1" /tmp/result.log
+grep -q "testhive" /tmp/result.log || { logerror "❌ Hive database testhive not found"; exit 1; }
+grep -q "test_hdfs" /tmp/result.log || { logerror "❌ Hive table test_hdfs not found"; exit 1; }
+grep -q "value1" /tmp/result.log || { logerror "❌ Data not found in Hive table"; exit 1; }
+log "✅ Hive database, table and data verified"
