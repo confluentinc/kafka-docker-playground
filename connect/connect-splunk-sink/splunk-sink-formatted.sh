@@ -45,6 +45,7 @@ playground connector create-or-update --connector splunk-sink  << EOF
      "splunk.indexes": "main",
      "splunk.hec.uri": "http://splunk:8088",
      "splunk.hec.token": "99582090-3ac3-4db1-9487-e17b17a05081",
+     "splunk.hec.ssl.enforced": "false",
      "splunk.hec.json.event.formatted": "true",
      "splunk.hec.max.batch.size": "1",
      "splunk.sourcetypes": "my_sourcetype",
@@ -57,7 +58,7 @@ log "Sleeping 80 seconds"
 sleep 80
 
 log "Verify data is in splunk"
-docker exec splunk bash -c 'sudo /opt/splunk/bin/splunk search "sourcetype=\"kafka\" | table cust_id" -auth "admin:password"' > /tmp/result.log  2>&1
+docker exec splunk bash -c '/opt/splunk/bin/splunk search "sourcetype=\"kafka\" | table cust_id" -auth "admin:password"' > /tmp/result.log  2>&1
 cat /tmp/result.log
 grep '000013934' /tmp/result.log
 # requires fix for https://github.com/splunk/kafka-connect-splunk/issues/444
