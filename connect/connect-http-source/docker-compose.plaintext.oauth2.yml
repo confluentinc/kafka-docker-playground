@@ -2,7 +2,9 @@
 services:
 
   httpserver:
+    # vdesabou/http-sink-demo publishes no s390x manifest; run under QEMU emulation on s390x.
     image: vdesabou/http-sink-demo
+    platform: linux/amd64
     hostname: httpserver
     container_name: httpserver
     ports:
