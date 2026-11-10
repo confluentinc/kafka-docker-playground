@@ -7,10 +7,30 @@ source ${DIR}/../../scripts/utils.sh
 PLAYGROUND_ENVIRONMENT=${PLAYGROUND_ENVIRONMENT:-"plaintext"}
 playground start-environment --environment "${PLAYGROUND_ENVIRONMENT}" --docker-compose-override-file "${PWD}/docker-compose.plaintext.with-transforms.yml"
 
+log "Waiting for Couchbase Server to accept connections"
+for i in $(seq 1 90)
+do
+     if docker exec couchbase curl -sf http://localhost:8091/pools > /dev/null 2>&1
+     then
+          break
+     fi
+     sleep 5
+done
+
 log "Creating Couchbase cluster"
-docker exec couchbase bash -c "/opt/couchbase/bin/couchbase-cli cluster-init --cluster-username Administrator --cluster-password password --services=data,index,query"
+docker exec couchbase bash -c "/opt/couchbase/bin/couchbase-cli cluster-init --cluster-username Administrator --cluster-password password --services=data"
 log "Install Couchbase bucket example travel-sample"
 curl -X POST -u Administrator:password http://localhost:8091/sampleBuckets/install -d '["travel-sample"]'
+
+log "Waiting for bucket travel-sample to be ready"
+for i in $(seq 1 120)
+do
+     if docker exec couchbase bash -c "cbc cat probe -U couchbase://localhost/travel-sample -u Administrator -P password" 2>&1 | grep -q "DOCUMENT_NOT_FOUND\|CAS="
+     then
+          break
+     fi
+     sleep 5
+done
 
 log "Creating Couchbase Source connector with transforms"
 playground connector create-or-update --connector couchbase-source  << EOF
