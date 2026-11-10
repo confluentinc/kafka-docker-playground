@@ -17,13 +17,31 @@ then
      exit 111
 fi
 
+if is_s390x
+then
+     # the natively running connector's SCRAM-SHA-256 login to the emulated
+     # mongod fails under QEMU ("Exception authenticating
+     # MongoCredential{mechanism=SCRAM-SHA-256, ...}") unless OpenSSL's
+     # CPU-specific code paths are off, as qemu_openssl_software_fallback_flag
+     # does for docker run (passed through by docker-compose.plaintext.yml,
+     # unset elsewhere)
+     export OPENSSL_ia32cap=0x0
+fi
+
 PLAYGROUND_ENVIRONMENT=${PLAYGROUND_ENVIRONMENT:-"plaintext"}
 playground start-environment --environment "${PLAYGROUND_ENVIRONMENT}" --docker-compose-override-file "${PWD}/docker-compose.plaintext.yml"
+
+# s390x: the emulated x86 mongod otherwise counts 0 CPUs and doesn't start
+qemu_recreate_with_x86_cpuinfo mongodb
+
+# mongod (emulated under QEMU on s390x) can take far longer to accept
+# connections and to become primary, so wait for both instead of assuming
+playground container logs --container mongodb --wait-for-log "Waiting for connections" --max-wait 600
 
 log "Initialize MongoDB replica set"
 docker exec -i mongodb mongosh --eval 'rs.initiate({_id: "debezium", members:[{_id: 0, host: "mongodb:27017"}]})'
 
-sleep 5
+playground container logs --container mongodb --wait-for-log "Transition to primary complete" --max-wait 300
 
 log "Create a user profile"
 docker exec -i mongodb mongosh << EOF

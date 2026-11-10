@@ -3,6 +3,7 @@ services:
 
   mongodb:
     image: mongo:latest
+    platform: linux/amd64
     hostname: mongodb
     container_name: mongodb
     ports:
@@ -10,10 +11,13 @@ services:
     environment:
       MONGO_INITDB_ROOT_USERNAME: debezium
       MONGO_INITDB_ROOT_PASSWORD: dbz
+      # no value: only set when exported (s390x, see the test script)
+      OPENSSL_ia32cap:
     entrypoint: [ "/usr/bin/mongod", "--bind_ip_all", "--replSet", "debezium" ]
 
   mongo-express:
     image: mongo-express:latest
+    platform: linux/amd64
     hostname: mongo-express
     container_name: mongo-express
     restart: always
