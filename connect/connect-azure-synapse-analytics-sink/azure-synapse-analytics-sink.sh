@@ -22,7 +22,7 @@ AZURE_RESOURCE_GROUP=$AZURE_NAME
 AZURE_SQL_NAME=$AZURE_NAME
 AZURE_FIREWALL_RULL_NAME=$AZURE_NAME
 AZURE_DATA_WAREHOUSE_NAME=$AZURE_NAME
-AZURE_REGION=westeurope
+AZURE_REGION=centralus
 AZURE_SQL_URL="jdbc:sqlserver://$AZURE_SQL_NAME.database.windows.net:1433"
 PASSWORD=$(date +%s | cksum | base64 | head -c 32 ; echo)
 PASSWORD="${PASSWORD}1"
@@ -156,7 +156,16 @@ EOF
 
 sleep 60
 
+SQLCMD_DOCKER_OPTS=""
+if [ "$(uname -m)" = "s390x" ]
+then
+    # fabiang/sqlcmd only publishes an amd64 manifest: run it under QEMU.
+    # Azure SQL always negotiates TLS, and QEMU's AES-NI emulation produces bad
+    # record MACs, so force OpenSSL onto its portable code path.
+    SQLCMD_DOCKER_OPTS="--platform linux/amd64 -e OPENSSL_ia32cap=0x0"
+fi
+
 log "Check Azure Synapse Analytics for Data"
-docker run -i fabiang/sqlcmd -S "$AZURE_SQL_NAME.database.windows.net,1433" -I -U "myadmin" -P "$PASSWORD" -d "$AZURE_DATA_WAREHOUSE_NAME" -Q "select * from kafka_products;" -s"|"  > /tmp/result.log  2>&1
+docker run -i $SQLCMD_DOCKER_OPTS fabiang/sqlcmd -S "$AZURE_SQL_NAME.database.windows.net,1433" -I -U "myadmin" -P "$PASSWORD" -d "$AZURE_DATA_WAREHOUSE_NAME" -Q "select * from kafka_products;" -s"|"  > /tmp/result.log  2>&1
 cat /tmp/result.log
 grep "notebooks" /tmp/result.log
