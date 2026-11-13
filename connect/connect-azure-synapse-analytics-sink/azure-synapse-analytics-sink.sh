@@ -62,6 +62,21 @@ then
     --server $AZURE_SQL_NAME \
     --start-ip-address 0.0.0.0 \
     --end-ip-address 0.0.0.0
+
+    if [ "$(uname -m)" = "s390x" ]
+    then
+        # The s390x CI agents run on IBM Cloud, not Azure, so the 0.0.0.0
+        # "allow Azure services" rule above does not admit them: also allow
+        # the agent's own public IP.
+        log "Enable a server-level firewall rule for the s390x agent IP"
+        MY_IP=$(curl -s https://ipinfo.io/ip)
+        az sql server firewall-rule create \
+        --name "${AZURE_FIREWALL_RULL_NAME}agent" \
+        --resource-group $AZURE_RESOURCE_GROUP \
+        --server $AZURE_SQL_NAME \
+        --start-ip-address $MY_IP \
+        --end-ip-address $MY_IP
+    fi
 else
     log "Enable a server-level firewall rule"
     MY_IP=$(curl https://ipinfo.io/ip)
