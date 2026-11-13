@@ -73,6 +73,37 @@ then
     --server $AZURE_SQL_NAME \
     --start-ip-address $MY_IP \
     --end-ip-address $MY_IP
+
+    if [ "$(uname -m)" = "s390x" ]
+    then
+        # The s390x CI agents egress through more than one public IP, and each
+        # new connection can leave from a different one, so a single lookup is
+        # not enough. Sample the egress IP several times and whitelist every
+        # distinct address seen.
+        # TODO: replace with the s390x agent pool's static egress IPs.
+        RUNNER_IPS="$MY_IP"
+        for i in $(seq 1 10)
+        do
+            ip=$(curl -s --max-time 10 https://ipinfo.io/ip || true)
+            if [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] && ! echo " $RUNNER_IPS " | grep -q " $ip "
+            then
+                RUNNER_IPS="$RUNNER_IPS $ip"
+            fi
+        done
+        log "s390x runner egress IPs seen: $RUNNER_IPS"
+        n=0
+        for ip in $RUNNER_IPS
+        do
+            n=$((n+1))
+            [ "$ip" = "$MY_IP" ] && continue
+            az sql server firewall-rule create \
+            --name ${AZURE_FIREWALL_RULL_NAME}-runner-$n \
+            --resource-group $AZURE_RESOURCE_GROUP \
+            --server $AZURE_SQL_NAME \
+            --start-ip-address $ip \
+            --end-ip-address $ip
+        done
+    fi
 else
     log "Enable a server-level firewall rule"
     MY_IP=$(curl https://ipinfo.io/ip)
@@ -184,6 +215,10 @@ then
 else
     SQLCMD_CMD="docker run -i fabiang/sqlcmd"
 fi
+# don't let set -e exit before the sqlcmd output is printed: the grep below is
+# the actual assertion
+set +e
 $SQLCMD_CMD -S "$AZURE_SQL_NAME.database.windows.net,1433" -I -U "myadmin" -P "$PASSWORD" -d "$AZURE_DATA_WAREHOUSE_NAME" -Q "select * from kafka_products;" -s"|"  > /tmp/result.log  2>&1
+set -e
 cat /tmp/result.log
 grep "notebooks" /tmp/result.log
