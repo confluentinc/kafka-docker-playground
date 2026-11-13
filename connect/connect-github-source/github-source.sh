@@ -19,6 +19,8 @@ then
      exit 1
 fi
 
+CONNECTOR_GITHUB_REPOSITORIES=${CONNECTOR_GITHUB_REPOSITORIES:-"vdesabou/kafka-docker-playground"}
+
 PLAYGROUND_ENVIRONMENT=${PLAYGROUND_ENVIRONMENT:-"plaintext"}
 playground start-environment --environment "${PLAYGROUND_ENVIRONMENT}" --docker-compose-override-file "${PWD}/docker-compose.plaintext.yml"
 
@@ -30,7 +32,7 @@ then
      "topic.name.pattern":"github-topic-\${resourceName}",
      "tasks.max": "1",
      "github.service.url":"https://api.github.com",
-     "github.repositories":"apache/kafka",
+     "github.repositories":"$CONNECTOR_GITHUB_REPOSITORIES",
      "github.resources":"stargazers",
      "github.since":"2019-01-01",
      "github.access.token": "$CONNECTOR_GITHUB_ACCESS_TOKEN",
@@ -53,7 +55,7 @@ else
      "topic.name.pattern":"github-topic-\${entityName}",
      "tasks.max": "1",
      "github.service.url":"https://api.github.com",
-     "github.repositories":"apache/kafka",
+     "github.repositories":"$CONNECTOR_GITHUB_REPOSITORIES",
      "github.tables":"stargazers",
      "github.since":"2019-01-01",
      "github.access.token": "$CONNECTOR_GITHUB_ACCESS_TOKEN",
