@@ -22,7 +22,7 @@ AZURE_RESOURCE_GROUP=$AZURE_NAME
 AZURE_SQL_NAME=$AZURE_NAME
 AZURE_FIREWALL_RULL_NAME=$AZURE_NAME
 AZURE_DATA_WAREHOUSE_NAME=$AZURE_NAME
-AZURE_REGION=centralus
+AZURE_REGION=${AZURE_REGION:-westeurope}
 AZURE_SQL_URL="jdbc:sqlserver://$AZURE_SQL_NAME.database.windows.net:1433"
 PASSWORD=$(date +%s | cksum | base64 | head -c 32 ; echo)
 PASSWORD="${PASSWORD}1"
@@ -63,20 +63,16 @@ then
     --start-ip-address 0.0.0.0 \
     --end-ip-address 0.0.0.0
 
-    if [ "$(uname -m)" = "s390x" ]
-    then
-        # The s390x CI agents run on IBM Cloud, not Azure, so the 0.0.0.0
-        # "allow Azure services" rule above does not admit them: also allow
-        # the agent's own public IP.
-        log "Enable a server-level firewall rule for the s390x agent IP"
-        MY_IP=$(curl -s https://ipinfo.io/ip)
-        az sql server firewall-rule create \
-        --name "${AZURE_FIREWALL_RULL_NAME}agent" \
-        --resource-group $AZURE_RESOURCE_GROUP \
-        --server $AZURE_SQL_NAME \
-        --start-ip-address $MY_IP \
-        --end-ip-address $MY_IP
-    fi
+    # 0.0.0.0/0.0.0.0 only allows Azure-hosted callers through (e.g. GitHub Actions
+    # runners) - CI runners hosted outside Azure (e.g. Semaphore on AWS) also need
+    # their actual public IP whitelisted
+    MY_IP=$(curl -s https://ipinfo.io/ip)
+    az sql server firewall-rule create \
+    --name ${AZURE_FIREWALL_RULL_NAME}-runner \
+    --resource-group $AZURE_RESOURCE_GROUP \
+    --server $AZURE_SQL_NAME \
+    --start-ip-address $MY_IP \
+    --end-ip-address $MY_IP
 else
     log "Enable a server-level firewall rule"
     MY_IP=$(curl https://ipinfo.io/ip)
@@ -171,16 +167,23 @@ EOF
 
 sleep 60
 
-SQLCMD_DOCKER_OPTS=""
+log "Check Azure Synapse Analytics for Data"
 if [ "$(uname -m)" = "s390x" ]
 then
-    # fabiang/sqlcmd only publishes an amd64 manifest: run it under QEMU.
-    # Azure SQL always negotiates TLS, and QEMU's AES-NI emulation produces bad
-    # record MACs, so force OpenSSL onto its portable code path.
-    SQLCMD_DOCKER_OPTS="--platform linux/amd64 -e OPENSSL_ia32cap=0x0"
+    # fabiang/sqlcmd only publishes an amd64 manifest and produces no output
+    # under QEMU, so use Microsoft's go-sqlcmd, which ships a static native
+    # linux-s390x build (same -S/-I/-U/-P/-d/-Q/-s flags).
+    GO_SQLCMD_VERSION=v1.10.0
+    GO_SQLCMD_SHA256=dce97c5f7588078658cf080f0cd79732fbaecfdb62981063d0618499688b4de4
+    GO_SQLCMD_DIR=/tmp/go-sqlcmd-${GO_SQLCMD_VERSION}
+    mkdir -p "$GO_SQLCMD_DIR"
+    curl -fsSL -o "$GO_SQLCMD_DIR/sqlcmd.tar.bz2" "https://github.com/microsoft/go-sqlcmd/releases/download/${GO_SQLCMD_VERSION}/sqlcmd-linux-s390x.tar.bz2"
+    echo "${GO_SQLCMD_SHA256}  $GO_SQLCMD_DIR/sqlcmd.tar.bz2" | sha256sum -c -
+    tar -xjf "$GO_SQLCMD_DIR/sqlcmd.tar.bz2" -C "$GO_SQLCMD_DIR" sqlcmd
+    SQLCMD_CMD="$GO_SQLCMD_DIR/sqlcmd"
+else
+    SQLCMD_CMD="docker run -i fabiang/sqlcmd"
 fi
-
-log "Check Azure Synapse Analytics for Data"
-docker run -i $SQLCMD_DOCKER_OPTS fabiang/sqlcmd -S "$AZURE_SQL_NAME.database.windows.net,1433" -I -U "myadmin" -P "$PASSWORD" -d "$AZURE_DATA_WAREHOUSE_NAME" -Q "select * from kafka_products;" -s"|"  > /tmp/result.log  2>&1
+$SQLCMD_CMD -S "$AZURE_SQL_NAME.database.windows.net,1433" -I -U "myadmin" -P "$PASSWORD" -d "$AZURE_DATA_WAREHOUSE_NAME" -Q "select * from kafka_products;" -s"|"  > /tmp/result.log  2>&1
 cat /tmp/result.log
 grep "notebooks" /tmp/result.log
