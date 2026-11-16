@@ -17,6 +17,15 @@ then
      exit 1
 fi
 
+# s390x: google/cloud-sdk publishes no s390x image, so gcloud/cbt run emulated
+# under QEMU, whose AES-NI emulation corrupts TLS to *.googleapis.com
+# ([SSL: RECORD_LAYER_FAILURE] on gcloud auth). OPENSSL_ia32cap=0x0 disables the
+# emulated AES-NI path. Empty (no-op) off s390x.
+OPENSSL_IA32CAP_ENV=""
+if [ "$(uname -m)" = "s390x" ]; then
+  OPENSSL_IA32CAP_ENV="-e OPENSSL_ia32cap=0x0"
+fi
+
 GCP_BIGTABLE_REGION=${1:-europe-west2-a}
 GCP_BIGTABLE_INSTANCE="pg${USER}bg${TAG}"
 GCP_BIGTABLE_INSTANCE=${GCP_BIGTABLE_INSTANCE//[-.]/}
@@ -45,25 +54,25 @@ log "Doing gsutil authentication"
 set +e
 docker rm -f gcloud-config
 set -e
-docker run -i -v ${GCP_KEYFILE}:/tmp/keyfile.json --name gcloud-config google/cloud-sdk:latest gcloud auth activate-service-account --project ${GCP_PROJECT} --key-file /tmp/keyfile.json
+docker run -i -v ${GCP_KEYFILE}:/tmp/keyfile.json --name gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gcloud auth activate-service-account --project ${GCP_PROJECT} --key-file /tmp/keyfile.json
 
 set +e
 log "Deleting instance, if required"
-docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud bigtable instances delete $GCP_BIGTABLE_INSTANCE --project $GCP_PROJECT  << EOF
+docker run -i --volumes-from gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gcloud bigtable instances delete $GCP_BIGTABLE_INSTANCE --project $GCP_PROJECT  << EOF
 Y
 EOF
 set -e
 log "Create a BigTable Instance and Database"
-docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud bigtable instances create $GCP_BIGTABLE_INSTANCE --project $GCP_PROJECT --cluster-config=id=$GCP_BIGTABLE_INSTANCE,zone=$GCP_BIGTABLE_REGION --display-name="playground-bigtable-instance"
+docker run -i --volumes-from gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gcloud bigtable instances create $GCP_BIGTABLE_INSTANCE --project $GCP_PROJECT --cluster-config=id=$GCP_BIGTABLE_INSTANCE,zone=$GCP_BIGTABLE_REGION --display-name="playground-bigtable-instance"
 
 function cleanup_cloud_resources {
   log "Delete GCP BigTable table kafka_big_query_stats"
   check_if_continue
-  docker run -i --volumes-from gcloud-config google/cloud-sdk:latest cbt -project $GCP_PROJECT -instance $GCP_BIGTABLE_INSTANCE deletetable kafka_big_query_stats
+  docker run -i --volumes-from gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest cbt -project $GCP_PROJECT -instance $GCP_BIGTABLE_INSTANCE deletetable kafka_big_query_stats
 
   log "Delete GCP BigTable instance $GCP_BIGTABLE_INSTANCE"
   check_if_continue
-docker run -i --volumes-from gcloud-config google/cloud-sdk:latest gcloud bigtable instances delete $GCP_BIGTABLE_INSTANCE --project $GCP_PROJECT  << EOF
+docker run -i --volumes-from gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gcloud bigtable instances delete $GCP_BIGTABLE_INSTANCE --project $GCP_PROJECT  << EOF
 Y
 EOF
 
@@ -132,10 +141,10 @@ then
   set +e
   docker rm -f gcloud-config
   set -e
-  docker run -i -v ${GCP_KEYFILE}:/tmp/keyfile.json --name gcloud-config google/cloud-sdk:latest gcloud auth activate-service-account --project ${GCP_PROJECT} --key-file /tmp/keyfile.json
+  docker run -i -v ${GCP_KEYFILE}:/tmp/keyfile.json --name gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest gcloud auth activate-service-account --project ${GCP_PROJECT} --key-file /tmp/keyfile.json
 
   log "Verify data is in GCP BigTable"
-  docker run -i --volumes-from gcloud-config google/cloud-sdk:latest cbt -project $GCP_PROJECT -instance $GCP_BIGTABLE_INSTANCE read kafka_big_query_stats > /tmp/result.log  2>&1
+  docker run -i --volumes-from gcloud-config ${OPENSSL_IA32CAP_ENV} google/cloud-sdk:latest cbt -project $GCP_PROJECT -instance $GCP_BIGTABLE_INSTANCE read kafka_big_query_stats > /tmp/result.log  2>&1
   cat /tmp/result.log
   grep "Bob" /tmp/result.log
 fi
