@@ -73,6 +73,37 @@ then
     --server $AZURE_SQL_NAME \
     --start-ip-address $MY_IP \
     --end-ip-address $MY_IP
+
+    if [ "$(uname -m)" = "s390x" ]
+    then
+        # The s390x CI agents egress through more than one public IP, and each
+        # new connection can leave from a different one, so a single lookup is
+        # not enough. Sample the egress IP several times and whitelist every
+        # distinct address seen.
+        # TODO: replace with the s390x agent pool's static egress IPs.
+        RUNNER_IPS="$MY_IP"
+        for i in $(seq 1 20)
+        do
+            ip=$(curl -s --max-time 10 https://ipinfo.io/ip || true)
+            if [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] && ! echo " $RUNNER_IPS " | grep -q " $ip "
+            then
+                RUNNER_IPS="$RUNNER_IPS $ip"
+            fi
+        done
+        log "s390x runner egress IPs seen: $RUNNER_IPS"
+        n=0
+        for ip in $RUNNER_IPS
+        do
+            n=$((n+1))
+            [ "$ip" = "$MY_IP" ] && continue
+            az sql server firewall-rule create \
+            --name ${AZURE_FIREWALL_RULL_NAME}-runner-$n \
+            --resource-group $AZURE_RESOURCE_GROUP \
+            --server $AZURE_SQL_NAME \
+            --start-ip-address $ip \
+            --end-ip-address $ip
+        done
+    fi
 else
     log "Enable a server-level firewall rule"
     MY_IP=$(curl https://ipinfo.io/ip)
@@ -168,6 +199,50 @@ EOF
 sleep 60
 
 log "Check Azure Synapse Analytics for Data"
-docker run -i fabiang/sqlcmd -S "$AZURE_SQL_NAME.database.windows.net,1433" -I -U "myadmin" -P "$PASSWORD" -d "$AZURE_DATA_WAREHOUSE_NAME" -Q "select * from kafka_products;" -s"|"  > /tmp/result.log  2>&1
+# don't let set -e exit before the query output is printed: the grep below is
+# the actual assertion
+set +e
+if [ "$(uname -m)" = "s390x" ]
+then
+    # fabiang/sqlcmd only publishes an amd64 manifest, and go-sqlcmd's s390x
+    # build mis-decodes the server's UTF-16 replies (big-endian bug). Query with
+    # the connector's own mssql-jdbc driver on a native s390x JDK instead.
+    VERIFY_DIR=$(mktemp -d)
+    cat > "$VERIFY_DIR/Verify.java" << 'JAVA'
+import java.sql.*;
+
+public class Verify {
+    public static void main(String[] args) throws Exception {
+        try (Connection c = DriverManager.getConnection(System.getenv("JDBC_URL"), System.getenv("JDBC_USER"), System.getenv("JDBC_PASSWORD"));
+             Statement s = c.createStatement();
+             ResultSet r = s.executeQuery(System.getenv("JDBC_QUERY"))) {
+            int cols = r.getMetaData().getColumnCount();
+            int rows = 0;
+            while (r.next()) {
+                StringBuilder line = new StringBuilder();
+                for (int i = 1; i <= cols; i++) {
+                    if (i > 1) line.append('|');
+                    line.append(r.getString(i));
+                }
+                System.out.println(line);
+                rows++;
+            }
+            System.out.println("(" + rows + " rows affected)");
+        }
+    }
+}
+JAVA
+    MSSQL_JDBC_JAR=$(docker exec connect bash -c 'ls /usr/share/confluent-hub-components/confluentinc-kafka-connect-azure-sql-dw/lib/mssql-jdbc-*.jar | head -1')
+    docker cp "connect:$MSSQL_JDBC_JAR" "$VERIFY_DIR/mssql-jdbc.jar"
+    docker run --rm -v "$VERIFY_DIR:/verify:z" \
+        -e JDBC_URL="${AZURE_SQL_URL};databaseName=${AZURE_DATA_WAREHOUSE_NAME}" \
+        -e JDBC_USER="myadmin" \
+        -e JDBC_PASSWORD="$PASSWORD" \
+        -e JDBC_QUERY="select * from kafka_products;" \
+        eclipse-temurin:21-jdk java -cp /verify/mssql-jdbc.jar /verify/Verify.java > /tmp/result.log 2>&1
+else
+    docker run -i fabiang/sqlcmd -S "$AZURE_SQL_NAME.database.windows.net,1433" -I -U "myadmin" -P "$PASSWORD" -d "$AZURE_DATA_WAREHOUSE_NAME" -Q "select * from kafka_products;" -s"|"  > /tmp/result.log  2>&1
+fi
+set -e
 cat /tmp/result.log
 grep "notebooks" /tmp/result.log
