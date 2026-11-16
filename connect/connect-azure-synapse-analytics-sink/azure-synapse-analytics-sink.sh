@@ -22,7 +22,7 @@ AZURE_RESOURCE_GROUP=$AZURE_NAME
 AZURE_SQL_NAME=$AZURE_NAME
 AZURE_FIREWALL_RULL_NAME=$AZURE_NAME
 AZURE_DATA_WAREHOUSE_NAME=$AZURE_NAME
-AZURE_REGION=westeurope
+AZURE_REGION=${AZURE_REGION:-westeurope}
 AZURE_SQL_URL="jdbc:sqlserver://$AZURE_SQL_NAME.database.windows.net:1433"
 PASSWORD=$(date +%s | cksum | base64 | head -c 32 ; echo)
 PASSWORD="${PASSWORD}1"
@@ -62,6 +62,17 @@ then
     --server $AZURE_SQL_NAME \
     --start-ip-address 0.0.0.0 \
     --end-ip-address 0.0.0.0
+
+    # 0.0.0.0/0.0.0.0 only allows Azure-hosted callers through (e.g. GitHub Actions
+    # runners) - CI runners hosted outside Azure (e.g. Semaphore on AWS) also need
+    # their actual public IP whitelisted
+    MY_IP=$(curl -s https://ipinfo.io/ip)
+    az sql server firewall-rule create \
+    --name ${AZURE_FIREWALL_RULL_NAME}-runner \
+    --resource-group $AZURE_RESOURCE_GROUP \
+    --server $AZURE_SQL_NAME \
+    --start-ip-address $MY_IP \
+    --end-ip-address $MY_IP
 else
     log "Enable a server-level firewall rule"
     MY_IP=$(curl https://ipinfo.io/ip)
