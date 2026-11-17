@@ -300,7 +300,7 @@ log "Not emptying the shared staging bucket, only the staged files of the topic 
 # one topic per run: the connector skips (and never auto-creates the table for) records whose offset
 # is not above a file left under topics/<topic>/ in the shared staging bucket by an earlier run
 # the environment is in the name: CI runs this example in the plaintext and cfk jobs of the same run, at the same time
-DATABRICKS_SUFFIX="$(echo "${USER:-playground}_${GITHUB_RUN_NUMBER:-$(date +%s)}_${TAG_BASE}_${PLAYGROUND_ENVIRONMENT}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '_')"
+DATABRICKS_SUFFIX="$(echo "${USER:-playground}_$(date +%s)_${TAG_BASE}_${PLAYGROUND_ENVIRONMENT}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '_')"
 DATABRICKS_TOPIC="pageviews_${DATABRICKS_SUFFIX}"
 DATABRICKS_TABLE_NAME="pageviews_${DATABRICKS_SUFFIX}"
 
