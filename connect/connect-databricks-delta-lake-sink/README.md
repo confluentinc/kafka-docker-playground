@@ -1,87 +1,49 @@
 # Databricks Delta Lake Sink connector
 
-
 ## Objective
 
-Quickly test [Databricks Delta Lake Sink](https://docs.confluent.io/kafka-connect-databricks-delta-lake-sink/current/overview.html) connector.
+Quickly test the [Databricks Delta Lake Sink](https://docs.confluent.io/kafka-connectors/databricks-delta-lake-sink/current/overview.html) connector.
 
+## Prerequisites
 
-## Databricks Setup
+### Databricks setup
 
-Follow all steps from [here](https://docs.confluent.io/kafka-connectors/databricks-delta-lake-sink/current/databricks-aws-setup.html#set-up-databricks-delta-lake-aws)
+Follow all the steps from [Set up Databricks Delta Lake (AWS)](https://docs.confluent.io/kafka-connectors/databricks-delta-lake-sink/current/databricks-aws-setup.html#set-up-databricks-delta-lake-aws).
+
+The script downloads the Simba Spark JDBC driver (`SparkJDBC42.jar`) if it is not present, copies it into the connector `lib` folder, and makes sure the Databricks SQL warehouse is running before starting the environment (when the http path is a SQL warehouse). The AWS CLI is used to remove the staged files of the run.
+
+With CP 8.x, the minimal supported connector version is 1.0.0 (the script exits with code 111 otherwise).
+
+| Variable | Description |
+| --- | --- |
+| `DATABRICKS_AWS_BUCKET_NAME` | Staging Amazon S3 bucket name |
+| `DATABRICKS_AWS_BUCKET_REGION` | Region of the staging bucket |
+| `DATABRICKS_AWS_STAGING_S3_ACCESS_KEY_ID` | AWS access key ID with access to the staging bucket |
+| `DATABRICKS_AWS_STAGING_S3_SECRET_ACCESS_KEY` | AWS secret access key with access to the staging bucket |
+| `DATABRICKS_SERVER_HOSTNAME` | Databricks server hostname |
+| `DATABRICKS_HTTP_PATH` | HTTP path of a Databricks SQL warehouse (`/sql/1.0/warehouses/...`) or all-purpose cluster (`sql/protocolv1/o/...`) |
+| `DATABRICKS_TOKEN` | Databricks personal access token |
 
 ## How to run
 
-Simply run:
-
-```
-$ just use <playground run> command and search for databricks-delta-lake-sink<use tab key to activate fzf completion (see https://kafka-docker-playground.io/#/cli?id=%e2%9a%a1-setup-completion), otherwise use full path, or correct relative path> <DATABRICKS_AWS_BUCKET_NAME> <DATABRICKS_AWS_BUCKET_REGION> <DATABRICKS_AWS_STAGING_S3_ACCESS_KEY_ID> <DATABRICKS_AWS_STAGING_S3_SECRET_ACCESS_KEY> <DATABRICKS_SERVER_HOSTNAME> <DATABRICKS_HTTP_PATH> .sh in this folder
-```
-
-Note: you can also export these values as environment variable
-
-## Details of what the script is doing
-
-Create topic pageviews:
-
 ```bash
-curl -s -X PUT \
-     -H "Content-Type: application/json" \
-     --data '{
-               "connector.class": "io.confluent.kafka.connect.datagen.DatagenConnector",
-               "kafka.topic": "pageviews",
-               "key.converter": "org.apache.kafka.connect.storage.StringConverter",
-               "value.converter": "io.confluent.connect.avro.AvroConverter",
-               "value.converter.schema.registry.url": "http://schema-registry:8081",
-               "value.converter.schemas.enable": "false",
-               "max.interval": 10,
-               "iterations": "10",
-               "tasks.max": "1",
-               "quickstart": "pageviews"
-          }' \
-     http://localhost:8083/connectors/datagen-orders/config | jq .
+playground run -f databricks-delta-lake-sink.sh
 ```
 
-Creating Databricks Delta Lake Sink connector:
+| Script | Description |
+| --- | --- |
+| `databricks-delta-lake-sink.sh` | Sink Avro `pageviews` records to a Delta Lake table, staged in Amazon S3 |
 
-```bash
-playground connector create-or-update --connector databricks-delta-lake-sink  << EOF
-{
-               "connector.class": "io.confluent.connect.databricks.deltalake.DatabricksDeltaLakeSinkConnector",
-               "topics": "pageviews",
-               "s3.region": "$DATABRICKS_AWS_BUCKET_REGION",
-               "key.converter": "org.apache.kafka.connect.storage.StringConverter",
-               "value.converter": "io.confluent.connect.avro.AvroConverter",
-               "value.converter.schema.registry.url": "http://schema-registry:8081",
-               "confluent.topic.bootstrap.servers": "broker:9092",
-               "confluent.topic.replication.factor":1,
-               "delta.lake.host.name": "$DATABRICKS_SERVER_HOSTNAME",
-               "delta.lake.http.path": "$DATABRICKS_HTTP_PATH",
-               "delta.lake.token": "$DATABRICKS_TOKEN",
-               "delta.lake.topic2table.map": "pageviews:pageviews",
-               "delta.lake.table.auto.create": "true",
-               "staging.s3.access.key.id": "$DATABRICKS_AWS_STAGING_S3_ACCESS_KEY_ID",
-               "staging.s3.secret.access.key": "$DATABRICKS_AWS_STAGING_S3_SECRET_ACCESS_KEY",
-               "staging.bucket.name": "$DATABRICKS_AWS_BUCKET_NAME",
-               "flush.interval.ms": "100",
-               "tasks.max": "1"
+## What the script does
 
-          }
-EOF
-```
+1. Downloads the Simba Spark JDBC driver if needed and ensures the Databricks SQL warehouse is running (skipped when the http path is an all-purpose cluster). Stops with the Databricks error if the warehouse start is refused (for example `denyReason: INACTIVE` when the workspace is deactivated).
+2. Does not empty the staging S3 bucket, as it is shared.
+3. Produces 100 Avro records to topic `pageviews_<user>_<run>_<cp version>_<environment>` (`pageviews` schema: `viewtime`, `userid`, `pageid`) with `playground topic produce`. `<user>` is `$USER` and `<run>` is `$GITHUB_RUN_NUMBER` (the epoch when not set), `<environment>` is `$PLAYGROUND_ENVIRONMENT` (CI runs this example in its `plaintext` and `cfk` jobs at the same time), in lower case, other characters than letters and digits replaced by `_`. One topic per run because the connector skips, and never auto-creates the table for, records whose offset is not above a file left under `topics/<topic>/` in the staging bucket by an earlier run (the bucket is shared and is not emptied).
+4. Creates the `databricks-delta-lake-sink` connector, mapping the topic to a table of the same name, created by the connector (`delta.lake.table.auto.create=true`). The table name includes the user because the Databricks workspace is shared: writing into a table created by someone else fails with `[INSUFFICIENT_PERMISSIONS] Insufficient privileges: Principal '...' does not have SELECT on Table 'workspace.default.pageviews'`. The table is new on each run, so it only holds the records of this run.
+5. Waits for the consumer lag to reach zero with `playground connector show-lag`.
+6. Checks that the 100 records are in the table with `SELECT COUNT(*)` (`databricks_wait_for_table_rows`: SQL Statement Execution API when the http path is a SQL warehouse, Command Execution API when it is an all-purpose cluster), and fails otherwise. The lag alone proves nothing: the staging S3 writer commits the offsets before the `COPY INTO`, so the lag reaches 0 even when the `COPY INTO` fails and the task is `FAILED`. When the `COPY INTO` fails, the connector log only shows `java.sql.SQLException (SQLState=HY000, vendorCode=500051)`: the real error is in the Query History of the SQL warehouse, for example `PERMISSION_DENIED: Principal '...' does not have READ FILES on External Location '...'` (the principal of the token needs `READ FILES` on the external location of the staging bucket).
+7. Drops the table and removes the staged files of the topic (with the staging S3 keys), as both are only for this run. A failure here only logs a warning.
 
+You can verify that data is present in the table using the Databricks UI:
 
-Listing staging Amazon S3 bucket:
-
-```bash
-export AWS_ACCESS_KEY_ID="$DATABRICKS_AWS_STAGING_S3_ACCESS_KEY_ID"
-export AWS_SECRET_ACCESS_KEY="$DATABRICKS_AWS_STAGING_S3_SECRET_ACCESS_KEY"
-aws s3api list-objects --bucket "$DATABRICKS_AWS_BUCKET_NAME"
-```
-
-You can also verify data is present in table using UI:
-
-![ui](screenshot1.jpg)
-
-
-N.B: Control Center is reachable at [http://127.0.0.1:9021](http://127.0.0.1:9021])
+![Databricks UI](screenshot1.jpg)
