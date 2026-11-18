@@ -360,6 +360,17 @@ set +e
      export AWS_ACCESS_KEY_ID="$DATABRICKS_AWS_STAGING_S3_ACCESS_KEY_ID"
      export AWS_SECRET_ACCESS_KEY="$DATABRICKS_AWS_STAGING_S3_SECRET_ACCESS_KEY"
      export AWS_SESSION_TOKEN=""
-     aws s3 rm "s3://${DATABRICKS_AWS_BUCKET_NAME}/topics/${DATABRICKS_TOPIC}/" --recursive --region $DATABRICKS_AWS_BUCKET_REGION
+     staged_keys=$(aws s3api list-objects-v2 --bucket "${DATABRICKS_AWS_BUCKET_NAME}" --prefix "topics/${DATABRICKS_TOPIC}/" --query 'Contents[].Key' --output text --region $DATABRICKS_AWS_BUCKET_REGION)
+     for staged_key in $staged_keys
+     do
+          if [[ "$staged_key" == "topics/${DATABRICKS_TOPIC}/"* ]]
+          then
+               aws s3api delete-object --bucket "${DATABRICKS_AWS_BUCKET_NAME}" --key "$staged_key" --region $DATABRICKS_AWS_BUCKET_REGION
+          fi
+     done
+     remaining_keys=$(aws s3api list-objects-v2 --bucket "${DATABRICKS_AWS_BUCKET_NAME}" --prefix "topics/${DATABRICKS_TOPIC}/" --query 'KeyCount' --output text --region $DATABRICKS_AWS_BUCKET_REGION)
+     log "Staged files left under the prefix of topic ${DATABRICKS_TOPIC}: ${remaining_keys}"
 )
+log "Platform of the image of each running container"
+docker ps --format '{{.Image}}' | sort -u | xargs docker image inspect --format '{{.RepoTags}} {{.Os}}/{{.Architecture}}'
 set -e
