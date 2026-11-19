@@ -5,15 +5,26 @@ services:
     hostname: splunk
     container_name: splunk
     platform: linux/amd64
+    # start as the image's 'splunk' user (a mode docker-splunk supports): the
+    # entrypoint then turns Ansible 'become' off, so provisioning never uses
+    # sudo. Under QEMU (s390x) the default 'ansible' user can't sudo (setuid
+    # can't elevate, the agent's binfmt_misc entry has no C flag), and starting
+    # as root instead left /opt/splunk/var/log unwritable by splunkd there
+    # (EACCES on its first start)
+    user: splunk
     ports:
       - 8000:8000
     volumes:
-      - ../../connect/connect-splunk-sink/default.yml:/tmp/defaults/default.yml
+      - ../../connect/connect-splunk-sink/default.yml:/tmp/defaults/default.yml:z
     environment:
       SPLUNK_START_ARGS: --accept-license
       SPLUNK_USERNAME: admin
       SPLUNK_PASSWORD: password
       DEBUG: "true"
+      # required when starting as 'splunk': the check chowns /opt/splunk (as root)
+      SPLUNK_HOME_OWNERSHIP_ENFORCEMENT: "false"
+      # no value: only set when exported (s390x, see splunk-sink.sh)
+      OPENSSL_ia32cap:
 
   connect:
     depends_on:
