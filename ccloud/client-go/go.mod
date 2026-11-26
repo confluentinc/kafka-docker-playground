@@ -2,4 +2,7 @@ module app
 
 go 1.14
 
-require gopkg.in/confluentinc/confluent-kafka-go.v1 v1.1.0
+require (
+	github.com/confluentinc/confluent-kafka-go v1.9.2 // indirect
+	gopkg.in/confluentinc/confluent-kafka-go.v1 v1.8.2
+)
