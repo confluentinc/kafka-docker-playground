@@ -91,7 +91,7 @@ max_attempts="10"
 sleep_interval="60"
 attempt_num=1
 
-until docker run $CORE_TOOLS_DOCKER_FLAGS -v $PWD/LocalFunctionProj:/LocalFunctionProj mcr.microsoft.com/azure-functions/node:4-node20-core-tools bash -c "az login -u \"$AZ_USER\" -p \"$AZ_PASS\" > /dev/null 2>&1 && cd LocalFunctionProj && func azure functionapp publish \"$AZURE_FUNCTIONS_NAME\""
+until docker run $CORE_TOOLS_DOCKER_FLAGS -v $PWD/LocalFunctionProj:/LocalFunctionProj mcr.microsoft.com/azure-functions/node:4-node20-core-tools bash -c "az login -u \"$AZ_USER\" -p \"$AZ_PASS\" > /dev/null 2>&1 && cd LocalFunctionProj && func azure functionapp publish \"$AZURE_FUNCTIONS_NAME\" --build remote"
 do
     if (( attempt_num == max_attempts ))
     then
