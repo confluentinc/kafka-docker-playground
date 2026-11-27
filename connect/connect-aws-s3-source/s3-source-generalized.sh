@@ -28,7 +28,7 @@ handle_aws_credentials
 PLAYGROUND_ENVIRONMENT=${PLAYGROUND_ENVIRONMENT:-"plaintext"}
 playground start-environment --environment "${PLAYGROUND_ENVIRONMENT}" --docker-compose-override-file "${PWD}/docker-compose.plaintext.generalized.yml"
 
-AWS_BUCKET_NAME=pg-bucket-${USER}
+AWS_BUCKET_NAME=${AWS_BUCKET_NAME:-pg-bucket-${USER}}
 AWS_BUCKET_NAME=${AWS_BUCKET_NAME//[-.]/}
 
 log "Create bucket <$AWS_BUCKET_NAME>, if required"
