@@ -61,9 +61,16 @@ else
     ls -lrt
 fi
 
+# mcr.microsoft.com/azure-functions/node core tools image has no s390x manifest, run it emulated via QEMU
+CORE_TOOLS_DOCKER_FLAGS=""
+if is_s390x
+then
+    CORE_TOOLS_DOCKER_FLAGS="--platform linux/amd64 $(qemu_openssl_software_fallback_flag)"
+fi
+
 log "Creating local functions project with HTTP trigger"
 # https://docs.microsoft.com/en-us/azure/azure-functions/functions-create-first-azure-function-azure-cli?pivots=programming-language-javascript&tabs=bash%2Cbrowser
-docker run -v $PWD/LocalFunctionProj:/LocalFunctionProj mcr.microsoft.com/azure-functions/node:4-node20-core-tools bash -c "func init LocalFunctionProj --javascript && cd LocalFunctionProj && func new --name HttpExample --template \"HTTP trigger\" --authlevel \"anonymous\""
+docker run $CORE_TOOLS_DOCKER_FLAGS -v $PWD/LocalFunctionProj:/LocalFunctionProj mcr.microsoft.com/azure-functions/node:4-node20-core-tools bash -c "func init LocalFunctionProj --javascript && cd LocalFunctionProj && func new --name HttpExample --template \"HTTP trigger\" --authlevel \"anonymous\""
 
 log "Creating functions app $AZURE_FUNCTIONS_NAME"
 az functionapp create --consumption-plan-location "$AZURE_REGION" --name "$AZURE_FUNCTIONS_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --runtime node --storage-account "$AZURE_STORAGE_NAME" --runtime-version 22 --functions-version 4 --tags owner_email="$AZ_USER" cflt_managed_by=user cflt_managed_id="$USER" --disable-app-insights true
@@ -84,7 +91,7 @@ max_attempts="10"
 sleep_interval="60"
 attempt_num=1
 
-until docker run -v $PWD/LocalFunctionProj:/LocalFunctionProj mcr.microsoft.com/azure-functions/node:4-node20-core-tools bash -c "az login -u \"$AZ_USER\" -p \"$AZ_PASS\" > /dev/null 2>&1 && cd LocalFunctionProj && func azure functionapp publish \"$AZURE_FUNCTIONS_NAME\""
+until docker run $CORE_TOOLS_DOCKER_FLAGS -v $PWD/LocalFunctionProj:/LocalFunctionProj mcr.microsoft.com/azure-functions/node:4-node20-core-tools bash -c "az login -u \"$AZ_USER\" -p \"$AZ_PASS\" > /dev/null 2>&1 && cd LocalFunctionProj && func azure functionapp publish \"$AZURE_FUNCTIONS_NAME\""
 do
     if (( attempt_num == max_attempts ))
     then
@@ -103,7 +110,7 @@ attempt_num=1
 
 until [ ! -z "$FUNCTIONS_URL" ]
 do
-    output=$(docker run -v $PWD/LocalFunctionProj:/LocalFunctionProj mcr.microsoft.com/azure-functions/node:4-node20-core-tools bash -c "az login -u \"$AZ_USER\" -p \"$AZ_PASS\" > /dev/null 2>&1 && cd LocalFunctionProj && func azure functionapp list-functions \"$AZURE_FUNCTIONS_NAME\" --show-keys")
+    output=$(docker run $CORE_TOOLS_DOCKER_FLAGS -v $PWD/LocalFunctionProj:/LocalFunctionProj mcr.microsoft.com/azure-functions/node:4-node20-core-tools bash -c "az login -u \"$AZ_USER\" -p \"$AZ_PASS\" > /dev/null 2>&1 && cd LocalFunctionProj && func azure functionapp list-functions \"$AZURE_FUNCTIONS_NAME\" --show-keys")
 
     FUNCTIONS_URL=$(echo "$output" | grep "Invoke url" | grep -Eo 'https://[^ >]+' | head -1)
 
